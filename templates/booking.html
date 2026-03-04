@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Book a Cleaning</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="booking-body">
+    {% include '_navbar.html' %}
+
+    <main class="booking-wrap">
+      <section class="booking-copy">
+        <p class="eyebrow">Tailored cleaning</p>
+        <h1>Schedule a visit that fits your rhythm</h1>
+        <p>
+          Share your priorities, timing, and preferred cadence. Our concierge team assembles a dedicated crew
+          with pro-grade tools and eco-forward supplies for every appointment.
+        </p>
+        <ul>
+          <li>Available 7 days a week across Gauteng</li>
+          <li>Verified, insured cleaning teams</li>
+          <li>Digital reports & after-service checklists</li>
+        </ul>
+      </section>
+
+      <section class="booking-panel">
+        <h2>Book a Cleaning Service</h2>
+        <form method="POST" class="booking-form">
+          <label>
+            <span>Name</span>
+            <input type="text" name="name" placeholder="Full name" required>
+          </label>
+          <label>
+            <span>Address</span>
+            <input type="text" name="address" placeholder="Street, suburb, city" required>
+          </label>
+          <label>
+            <span>Service type</span>
+            <select name="service_type" required>
+              <option value="" disabled selected>Select a service</option>
+              <option>Signature Deep Clean</option>
+              <option>Move-in / Move-out</option>
+              <option>Corporate Care</option>
+              <option>Custom project</option>
+            </select>
+          </label>
+          <label>
+            <span>Date</span>
+            <input type="date" name="date" required>
+          </label>
+          <label>
+            <span>Notes</span>
+            <textarea name="notes" rows="3" placeholder="Any access notes, surface priorities, or time windows"></textarea>
+          </label>
+          <button type="submit" class="btn primary">Confirm booking</button>
+        </form>
+      </section>
+    </main>
+
+    {% include '_footer.html' %}
+</body>
+</html>

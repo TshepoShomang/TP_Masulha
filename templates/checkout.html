@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkout - CleanX</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  {% include '_navbar.html' %}
+
+  <!-- Checkout Confirmation -->
+  <section class="checkout">
+    <div class="container">
+      <h2>Checkout</h2>
+      <p>Processing your request...</p>
+    </div>
+  </section>
+
+  {% include '_footer.html' %}
+
+</body>
+</html>

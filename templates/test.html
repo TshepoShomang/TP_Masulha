@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cleaning Company</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.1/css/all.css">
+</head>
+<body>
+
+  {% include '_navbar.html' %}
+  
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        {% set level = ((category or 'info')|lower).replace(' ', '-') %}
+        <div class="flash flash-{{ level }}" role="status" data-flash-message data-flash-timeout="10000">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+  <main class="test-landing">
+    <!-- Hero Section -->
+    <section class="test-hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Precision cleaning</p>
+        <h1>Spaces that sparkle, schedules that breathe</h1>
+        <p>
+          Elevate every room with a dedicated team, eco-certified supplies, and a service cadence that flexes
+          around your calendar. From penthouse apartments to boutique offices, we leave no detail behind.
+        </p>
+        <div class="hero-actions">
+          <a href="/services" class="btn primary">Book a service</a>
+          <a href="/products" class="btn ghost">Shop supplies</a>
+        </div>
+        <dl class="hero-metrics">
+          <div>
+            <dt>Monthly projects</dt>
+            <dd>120+</dd>
+          </div>
+          <div>
+            <dt>Client satisfaction</dt>
+            <dd>4.9/5</dd>
+          </div>
+          <div>
+            <dt>Average response</dt>
+            <dd>&lt; 2 hrs</dd>
+          </div>
+        </dl>
+      </div>
+      <div class="hero-media">
+        <div class="hero-photo"></div>
+        <div class="hero-card">
+          <p class="eyebrow">This week</p>
+          <h3>36 deep cleans scheduled</h3>
+          <p>Teams dispatched across Pretoria, Sandton & Johannesburg.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Highlights -->
+    <section class="test-section test-highlights">
+      <article>
+        <h3>Tailored plans</h3>
+        <p>Choose weekly, bi-weekly, or project-based visits with instant confirmations.</p>
+      </article>
+      <article>
+        <h3>Specialist crews</h3>
+        <p>Each crew is vetted, insured, and equipped with pro-grade tools.</p>
+      </article>
+      <article>
+        <h3>Transparent pricing</h3>
+        <p>No hidden fees. Receive clear scopes, costs, and digital reports.</p>
+      </article>
+      <article>
+        <h3>Eco-forward</h3>
+        <p>Certified products that are safe for families, pets, and the planet.</p>
+      </article>
+    </section>
+
+    <!-- Services Showcase -->
+    <section class="test-section test-services">
+      <header>
+        <p class="eyebrow">Offerings</p>
+        <h2>Select the right clean</h2>
+        <p>Mix and match services to build your perfect package.</p>
+      </header>
+      <div class="service-grid">
+        <article>
+          <h3>Signature Deep Clean</h3>
+          <p>Top-to-bottom refresh for homes or offices needing a seasonal reset.</p>
+          <ul>
+            <li>Detail surfaces & appliances</li>
+            <li>High-touch sanitizing</li>
+            <li>Air-quality friendly products</li>
+          </ul>
+        </article>
+        <article>
+          <h3>Move-in / Move-out</h3>
+          <p>Hand-over ready cleans with photographic proof and checklist sign-offs.</p>
+          <ul>
+            <li>Cabinet & closet interiors</li>
+            <li>Grout & tile treatment</li>
+            <li>Flexible turnaround slots</li>
+          </ul>
+        </article>
+        <article>
+          <h3>Corporate Care</h3>
+          <p>Recurring office maintenance with after-hours availability and stocked consumables.</p>
+          <ul>
+            <li>Desk & tech safe practices</li>
+            <li>Conference ready floors</li>
+            <li>Dedicated account manager</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- Process Timeline -->
+    <section class="test-section test-process">
+      <header>
+        <p class="eyebrow">How it works</p>
+        <h2>Four steps to a calm space</h2>
+      </header>
+      <ol class="process-timeline">
+        <li>
+          <span>1</span>
+          <h4>Share your priorities</h4>
+          <p>Use the online form to outline rooms, surfaces, and any special requests.</p>
+        </li>
+        <li>
+          <span>2</span>
+          <h4>Confirm & customize</h4>
+          <p>We send a tailored plan, you adjust cadence, budget, and add-ons.</p>
+        </li>
+        <li>
+          <span>3</span>
+          <h4>Meet your crew</h4>
+          <p>Receive crew profiles ahead of time, track arrivals, and message live.</p>
+        </li>
+        <li>
+          <span>4</span>
+          <h4>Review & repeat</h4>
+          <p>After-action reports with photos keep you in the loop and ready to rebook.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- CTA -->
+    <section class="test-section test-cta">
+      <div>
+        <h2>Ready for a spotless routine?</h2>
+        <p>Access premium cleaning services, curated products, and concierge-level support.</p>
+      </div>
+      <div class="cta-actions">
+        <a href="/services" class="btn primary">Schedule now</a>
+        <a href="/products" class="btn ghost">Browse products</a>
+      </div>
+    </section>
+  </main>
+
+  {% include '_footer.html' %}
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Our Products</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.1/css/all.css">
+</head>
+<body>
+    {% include '_navbar.html' %}
+
+
+    <!--product-->
+    <section class="products">
+        <div class="section-title">
+            <h2>our product</h2>
+        </div>
+        <!-- Search bar -->
+        <form method="get" action="{{ url_for('products') }}" class="product-search" id="productSearch">
+          <input type="text" name="q" placeholder="Search products..." value="{{ request.args.get('q','') }}" autocomplete="off" />
+        </form>
+        
+        {% if products and products|length > 0 %}
+          <div class="products-center">
+              {% for item in products %}
+                  {% set is_sold_out = (item.quantity is defined and (item.quantity or 0) | int <= 0) %}
+                  <article class="product{{ ' sold-out' if is_sold_out else '' }}">
+                      <div class="img-container">
+                          <img src="{{ url_for('static', filename=item.image) }}" alt="product" class="product-img">
+                          {% if not is_sold_out %}
+                            <form method="POST" action="{{ url_for('add_to_cart') }}">
+                                <input type="hidden" name="id" value="{{ item.id }}">
+                                <input type="hidden" name="title" value="{{ item.name }}">
+                                <input type="hidden" name="quantity" value=1>
+                                <input type="hidden" name="price" value="{{ item.price }}">
+                                <input type="hidden" name="image" value="{{ item.image }}">
+                                <button type="submit" class="bag-btn">
+                                    <i class="fas fa-shopping-cart"></i>
+                                    add to cart
+                                </button>
+                            </form>
+                          {% endif %}
+                      </div>
+                      <h3>{{item.name}}</h3>
+                      <h4>R{{item.price}}</h4>
+                      {% if item.quantity is defined and (item.quantity or 0) > 0 and (item.quantity or 0) < 10 %}
+                        <p class="low-stock-text">Only {{ item.quantity }} left</p>
+                      {% endif %}
+                      {% if is_sold_out %}
+                        <p class="sold-out-text">Sold out</p>
+                      {% endif %}
+                  </article>
+              {% endfor %}
+          </div>
+        {% else %}
+          <p class="product-empty">No products found. Try a different search.</p>
+        {% endif %}
+    </section>
+    <!--end of product-->
+
+    {% include '_footer.html' %}
+
+  <script>
+    (function(){
+      const form = document.getElementById('productSearch');
+      if(!form) return;
+      const input = form.querySelector('input[name="q"]');
+      if(!input) return;
+      let timer;
+      const submit = () => form.requestSubmit ? form.requestSubmit() : form.submit();
+      input.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(submit, 350);
+      });
+    })();
+  </script>
+
+</body>
+</html>

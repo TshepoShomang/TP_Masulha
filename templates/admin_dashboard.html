@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin · Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin_style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="admin-dashboard-body">
+  {% include '_navbar.html' %}
+
+  <main class="admin-dashboard-shell">
+    <section class="dashboard-hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Operations hub</p>
+        <h1>Track performance & unlock actions in one glance</h1>
+        <p class="subtext">
+          Stay ahead of fulfillment, monitor service bookings, and launch new products without leaving this page.
+        </p>
+        <div class="hero-actions">
+          <a class="btn primary" href="{{ url_for('admin_products_manage') }}">Manage catalogue</a>
+          <button type="button" class="btn ghost" data-scroll="#addProductForm">Quick add product</button>
+        </div>
+        <div class="hero-metrics">
+          <div class="hero-metric">
+            <strong>{{ totals.orders }}</strong>
+            <span>Orders to date</span>
+          </div>
+          <div class="hero-metric">
+            <strong>R{{ '%.2f'|format(totals.revenue) }}</strong>
+            <span>All-time revenue</span>
+          </div>
+          <div class="hero-metric">
+            <strong>{{ totals.products }}</strong>
+            <span>Live products</span>
+          </div>
+        </div>
+      </div>
+      
+    </section>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <section class="admin-alerts">
+      {% for category, message in messages %}
+        {% set level = ((category or 'info')|lower).replace(' ', '-') %}
+        <div class="flash flash-{{ level }}" role="status" data-flash-message data-flash-timeout="10000">{{ message }}</div>
+      {% endfor %}
+    </section>
+  {% endif %}
+{% endwith %}
+
+    <section class="stats-grid">
+      <article class="stat-card">
+        <div>
+          <p class="eyebrow">Orders</p>
+          <h3>{{ totals.orders }}</h3>
+        </div>
+        <p class="stat-hint">Includes service bookings synced this month.</p>
+      </article>
+      <article class="stat-card">
+        <div>
+          <p class="eyebrow">Revenue</p>
+          <h3>R{{ '%.2f'|format(totals.revenue) }}</h3>
+        </div>
+        <p class="stat-hint">Gross total of all paid product orders.</p>
+      </article>
+      <article class="stat-card">
+        <div>
+          <p class="eyebrow">Inventory</p>
+          <h3>{{ totals.products }}</h3>
+        </div>
+        <p class="stat-hint">Products available on the storefront.</p>
+      </article>
+    </section>
+
+    <section class="panel panel--orders" id="ordersPanel">
+      <div class="panel-head">
+        <div>
+          <h2>Incoming orders</h2>
+        </div>
+        <span class="pill pill--accent">{{ orders|length if orders else 0 }} awaiting review</span>
+      </div>
+      <div class="admin-tabs" id="newOrdersTabs">
+        <div class="tab-buttons">
+          <button type="button" class="tab-btn is-active" data-tab="products">Product orders</button>
+          <button type="button" class="tab-btn" data-tab="services">Service bookings</button>
+        </div>
+        <div class="tab-panels">
+          <div id="new-orders-products" class="tab-panel is-active fade-panel">
+            {% if orders %}
+              <ul id="productOrdersList" class="orders-list">
+                {% for o in orders %}
+                  <li class="{{ 'order-new' if not o.viewed else '' }}">
+                    <div class="order-meta">
+                      <div>
+                        <strong>#{{ o.id }}</strong>
+                        <span>
+                          {% set _order_name = (o.full_name if o.full_name else ((o.first_name or '') ~ ' ' ~ (o.last_name or ''))) | trim %}
+                          {{ _order_name if _order_name else (o.user_email or 'Guest') }}
+                          {% if o.phone %}&nbsp;·&nbsp;{{ o.phone }}{% endif %}
+                        </span>
+                      </div>
+                      <div class="order-tags">
+                        <span class="badge">{{ o.items }} items</span>
+                        <span class="badge">R{{ '%.2f'|format(o.total_amount) }}</span>
+                        {% if not o.viewed %}<span class="badge badge--new">New</span>{% endif %}
+                      </div>
+                    </div>
+                    <div class="order-actions">
+                      <form method="post" action="{{ url_for('admin_mark_viewed') }}" onsubmit="return markViewed(event, {{ o.id }})">
+                        <input type="hidden" name="order_id" value="{{ o.id }}">
+                        <button class="btn subtle" type="submit">Mark viewed</button>
+                      </form>
+                      <button type="button" class="btn ghost" onclick="openOrderDetails({{ o.id }}, this)">Details</button>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="empty-state">
+                <h3>No product orders yet</h3>
+                <p>Once customers checkout, they will appear here immediately.</p>
+              </div>
+            {% endif %}
+          </div>
+          <div id="new-orders-services" class="tab-panel fade-panel">
+            <div class="tab-loading">Loading service orders.</div>
+            <ul id="serviceOrdersList" class="order-cards" hidden></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel panel--history">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Completion log</p>
+          <h2>History</h2>
+        </div>
+      </div>
+      {% set completed_ids = session.get('admin_completed_orders') or [] %}
+      {% set any = false %}
+      <ul class="history-list">
+        {% for o in orders %}
+          {% if o.id in completed_ids %}
+            {% set any = true %}
+            <li>
+              <div>
+                <strong>#{{ o.id }}</strong>
+                {% set _hist_name = (o.full_name if o.full_name else ((o.first_name or '') ~ ' ' ~ (o.last_name or ''))) | trim %}
+                <span>{{ _hist_name if _hist_name else (o.user_email or 'Guest') }}</span>
+              </div>
+              <div class="history-meta">
+                {% if o.phone %}<span>{{ o.phone }}</span>{% endif %}
+                <span>R{{ '%.2f'|format(o.total_amount) }}</span>
+                <span>{{ o.items }} items</span>
+                <span class="badge badge--success">Completed</span>
+              </div>
+            </li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+      {% if not any %}
+        <div class="empty-state">
+          <h3>No completed orders yet</h3>
+          <p>Mark orders as completed to build a running history.</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="panel panel--stats">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Merch insights</p>
+          <h2>Product statistics</h2>
+        </div>
+        <a class="btn ghost" href="{{ url_for('admin_products_manage') }}">Edit catalogue</a>
+      </div>
+      {% if product_stats %}
+        <div class="product-stats">
+          {% for p in product_stats %}
+            <article class="product-stat-card">
+              <header>
+                <strong>#{{ p.id }}</strong>
+                <span>{{ p.name }}</span>
+              </header>
+              <div class="product-stat-footer">
+                <span>{{ p.qty }} sold</span>
+                <span>R{{ '%.2f'|format(p.revenue) }}</span>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state">
+          <h3>No sales data available</h3>
+          <p>Sales will appear here as soon as customers start purchasing.</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="panel panel--promote" id="promoteAdmin">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Access control</p>
+          <h2>Grant admin rights</h2>
+        </div>
+      </div>
+      {% if grantable_users %}
+        <form class="promote-form" method="post" action="{{ url_for('admin_promote_user') }}">
+          <label>
+            <span>Select user</span>
+            <div class="combo-field">
+              <input type="search" class="combo-search" placeholder="Search email..." data-filter-select="#adminPromoteSelect">
+              <select id="adminPromoteSelect" name="email" size="6" required>
+                {% for email in grantable_users %}
+                  <option value="{{ email }}">{{ email }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </label>
+          <button type="submit" class="btn primary">Give admin access</button>
+        </form>
+      {% else %}
+        <div class="empty-state">
+          <h3>All users are already admins</h3>
+          <p>Invite new users or revoke access to manage assignments.</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="panel panel--create" id="addProductForm">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Launchpad</p>
+          <h2>Add a product</h2>
+        </div>
+      </div>
+      <form class="create-form" method="post" action="{{ url_for('admin_add_product') }}" enctype="multipart/form-data">
+        <label>
+          <span>Name</span>
+          <input type="text" name="name" placeholder="Product name" required>
+        </label>
+        <label>
+          <span>Price</span>
+          <input type="number" name="price" step="0.01" placeholder="0.00" required>
+        </label>
+        <label>
+          <span>Image</span>
+          <input type="file" name="image" accept="image/*" required>
+        </label>
+        <button type="submit" class="btn primary">Create product</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- Order Details Modal -->
+  <div id="orderModal" class="modal" style="display:none;">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="orderModalTitle">
+      <div class="modal-header">
+        <h3 id="orderModalTitle">Order Details</h3>
+        <button type="button" class="btn btn-outline" data-close-modal>&times;</button>
+      </div>
+      <div class="modal-body">
+        <dl class="modal-grid">
+          <div>
+            <dt>Order ID</dt>
+            <dd id="modalOrderId">#—</dd>
+          </div>
+          <div>
+            <dt>Customer</dt>
+            <dd id="modalCustomer">—</dd>
+          </div>
+          <div>
+            <dt>Phone</dt>
+            <dd id="modalPhone">—</dd>
+          </div>
+          <div>
+            <dt>Email</dt>
+            <dd id="modalEmail">—</dd>
+          </div>
+          <div>
+            <dt>Address</dt>
+            <dd id="modalAddress">—</dd>
+          </div>
+          <div>
+            <dt>Total</dt>
+            <dd id="modalTotal">—</dd>
+          </div>
+          <div>
+            <dt>Date</dt>
+            <dd id="modalDate">—</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd id="modalStatus">—</dd>
+          </div>
+        </dl>
+        <table class="modal-table">
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Qty</th>
+              <th>Price</th>
+              <th>Subtotal</th>
+            </tr>
+          </thead>
+          <tbody id="modalItemsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function openOrderDetails(oid, btn){
+      const toggleLoader = window.toggleButtonLoading || function(){};
+      toggleLoader(btn, true);
+      try{
+        const res = await fetch(`/admin/orders/${oid}/details`);
+        if(!res.ok){
+          throw new Error('Failed to fetch order details');
+        }
+        const payload = await res.json();
+        if(!payload || !payload.ok){
+          throw new Error(payload?.error || 'Order not found');
+        }
+        const order = payload.order || {};
+        const modal = document.getElementById('orderModal');
+        if(!modal){
+          return;
+        }
+        const getText = (value, prefix='') => {
+          if(value === null || value === undefined || value === ''){
+            return '—';
+          }
+          if(typeof value === 'number' && prefix === 'R'){
+            return `${prefix}${value.toFixed(2)}`;
+          }
+          return `${prefix}${value}`;
+        };
+        const fullName = order.name || [order.first_name, order.last_name].filter(Boolean).join(' ').trim();
+        document.getElementById('modalOrderId').textContent = order.id ? `#${order.id}` : '—';
+        document.getElementById('modalCustomer').textContent = fullName || order.user_email || '—';
+        document.getElementById('modalPhone').textContent = getText(order.phone);
+        document.getElementById('modalEmail').textContent = order.user_email || '—';
+        document.getElementById('modalAddress').textContent = getText(order.address);
+        const totalVal = typeof order.total_amount === 'number' ? order.total_amount : parseFloat(order.total_amount || 0);
+        document.getElementById('modalTotal').textContent = isNaN(totalVal) ? getText(order.total_amount) : `R${totalVal.toFixed(2)}`;
+        document.getElementById('modalDate').textContent = order.order_date || '—';
+        document.getElementById('modalStatus').textContent = order.payment_status || '—';
+
+        const tbody = document.getElementById('modalItemsBody');
+        tbody.innerHTML = '';
+        const items = Array.isArray(order.items) ? order.items : [];
+        if(items.length === 0){
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td colspan="4" style="text-align:center;color:#6b7280;">No line items found.</td>';
+          tbody.appendChild(tr);
+        }else{
+          items.forEach(it => {
+            const name = it.name || `#${it.product_id ?? '-'}`;
+            const qty = (typeof it.quantity === 'number' ? it.quantity : parseInt(it.quantity || 1, 10)) || 1;
+            const price = (typeof it.unit_price === 'number') ? it.unit_price : parseFloat(it.unit_price || 0);
+            const subtotal = (typeof it.line_total === 'number') ? it.line_total : (price * qty);
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td>${name}</td>
+              <td>${qty}</td>
+              <td>${price ? 'R' + price.toFixed(2) : '—'}</td>
+              <td>${subtotal ? 'R' + subtotal.toFixed(2) : '—'}</td>
+            `;
+            tbody.appendChild(tr);
+          });
+        }
+        modal.style.display = 'block';
+        document.body.classList.add('modal-open');
+      }catch(err){
+        console.error('open order modal failed', err);
+        alert('Unable to load order details right now.');
+      }finally{
+        toggleLoader(btn, false);
+      }
+    }
+
+    async function markViewed(event, oid){
+      if(event){
+        event.preventDefault();
+      }
+      const toggleLoader = window.toggleButtonLoading || function(){};
+      const btn = event?.target?.closest('button');
+      toggleLoader(btn, true);
+      let reloadTriggered = false;
+      try{
+        const res = await fetch('{{ url_for('admin_mark_viewed') }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order_id: oid })
+        });
+        const data = await res.json();
+        if(data && data.ok){
+          reloadTriggered = true;
+          window.location.reload();
+          return false;
+        }
+      }catch(err){
+        console.error('mark viewed failed', err);
+      } finally {
+        if(!reloadTriggered){
+          toggleLoader(btn, false);
+        }
+      }
+      const form = event?.target?.closest('form');
+      if(form){
+        toggleLoader(btn, false);
+        form.submit();
+      }
+      return false;
+    }
+  </script>
+  <script>
+    document.addEventListener('click', (event) => {
+      const trigger = event.target.closest('[data-scroll]');
+      if (!trigger) return;
+      const target = document.querySelector(trigger.getAttribute('data-scroll'));
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+
+    function closeOrderModal(){
+      const modal = document.getElementById('orderModal');
+      if(modal){ modal.style.display = 'none'; }
+      document.body.classList.remove('modal-open');
+    }
+
+    document.addEventListener('click', (event) => {
+      if(event.target.matches('[data-close-modal]')){
+        closeOrderModal();
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if(event.key === 'Escape'){
+        closeOrderModal();
+      }
+    });
+    document.addEventListener('input', (event) => {
+      const target = event.target;
+      if(!target.matches('[data-filter-select]')){
+        return;
+      }
+      const select = document.querySelector(target.getAttribute('data-filter-select'));
+      if(!select){
+        return;
+      }
+      const term = target.value.trim().toLowerCase();
+      let firstVisible = null;
+      Array.from(select.options).forEach(opt => {
+        const match = opt.value.toLowerCase().includes(term);
+        opt.hidden = !match;
+        if(match && !firstVisible){
+          firstVisible = opt;
+        }
+      });
+      if(firstVisible){
+        select.value = firstVisible.value;
+      }
+    });
+  </script>
+  <script>
+    // Admin tabs (products/services) with smooth transitions and AJAX loading
+    // Removed legacy Manage tabs script
+  </script>
+  <script>
+    // New Orders: tabs for products/services with animation + AJAX load for services
+    document.addEventListener('DOMContentLoaded', () => {
+      const tabsWrap = document.getElementById('newOrdersTabs');
+      if(!tabsWrap) return;
+      const btns = tabsWrap.querySelectorAll('.tab-btn');
+      const panelProducts = document.getElementById('new-orders-products');
+      const panelServices = document.getElementById('new-orders-services');
+
+      function switchTab(name){
+        btns.forEach(b => b.classList.toggle('is-active', b.dataset.tab === name));
+        [panelProducts, panelServices].forEach(el => el && el.classList.remove('fade-in','fade-out','is-active'));
+        const active = name === 'services' ? panelServices : panelProducts;
+        if(active){ active.classList.add('is-active','fade-in'); }
+        const inactive = name === 'services' ? panelProducts : panelServices;
+        if(inactive){ inactive.classList.add('fade-out'); }
+      }
+      btns.forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+      // Fetch service orders once
+      let servicesLoaded = false;
+      async function loadServices(triggerBtn){
+        if(servicesLoaded) return;
+        const toggleLoader = window.toggleButtonLoading || function(){};
+        if(triggerBtn) toggleLoader(triggerBtn, true);
+        try{
+          const res = await fetch('{{ url_for('admin_services_list') }}');
+          const data = await res.json();
+          const list = document.getElementById('serviceOrdersList');
+          const loader = panelServices.querySelector('.tab-loading');
+          if(loader) loader.style.display = 'none';
+          list.hidden = false;
+          const items = (data && data.items) || [];
+          if(items.length === 0){
+            list.innerHTML = '<li class="order-card">No service orders yet.</li>';
+          } else {
+            list.innerHTML = items.map(s => `
+              <li class="order-card">
+                <div class="order-card__head">
+                  <strong>#${s.id}</strong>
+                  <span>${s.service_type ?? ''}</span>
+                </div>
+                <div><strong>Name:</strong> ${s.full_name ?? ''}</div>
+                <div><strong>Email:</strong> ${s.email ?? ''}</div>
+                <div><strong>Phone:</strong> ${s.phone ?? ''}</div>
+                <div><strong>Address:</strong> ${s.address ?? ''}</div>
+                <div><strong>When:</strong> ${s.date ?? ''} ${s.time_window ? '('+s.time_window+')' : ''}</div>
+                <div><strong>Status:</strong> ${s.status ?? ''}</div>
+                <div><strong>Price:</strong> ${typeof s.price==='number' ? 'R'+s.price.toFixed(2) : (s.price ?? '')}</div>
+              </li>
+            `).join('');
+          }
+          servicesLoaded = true;
+        }catch(err){ console.error('load services failed', err); }
+        finally{
+          if(triggerBtn) toggleLoader(triggerBtn, false);
+        }
+      }
+      // Preload services after first paint
+      setTimeout(() => loadServices(), 100);
+
+      // clicking on Services will ensure it is loaded
+      btns.forEach(b => b.addEventListener('click', () => {
+        if(b.dataset.tab === 'services') loadServices(b);
+      }));
+
+      // Initialize animation classes
+      panelProducts && panelProducts.classList.add('fade-panel');
+      panelServices && panelServices.classList.add('fade-panel');
+    });
+
+    // Override: on completion, reload so History Orders reflects immediately
+    if (typeof markCompleted === 'function') {
+      const _orig = markCompleted;
+      markCompleted = async function(id){
+        try{
+          const res = await fetch('/admin/mark-completed', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_id: id })
+          });
+          const data = await res.json();
+          if(data && data.ok){ location.reload(); }
+        }catch(err){ console.error('mark completed failed', err); }
+      };
+    }
+  </script>
+  {% include '_cart.html' %}
+</body>
+</html>

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Checkout Options</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="guest_body">
+  {% include '_navbar.html' %}
+  <div class="wrap">
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, message in messages %}
+      {% set level = ((category or 'info')|lower).replace(' ', '-') %}
+      <div class="flash flash-{{ level }}" role="status" data-flash-message data-flash-timeout="10000">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
+
+    <div class="grid">
+      <!-- Continue as Guest -->
+      <div class="card">
+        <h2>Continue as Guest</h2>
+        <p>Checkout without creating an account. We’ll only use these details for shipping and contact.</p>
+        <form method="POST" action="{{ url_for('checkout_guest_submit') }}">
+          <label for="email">Email Address</label>
+          <input type="email" id="email" name="email" required>
+          <label for="first_name">First Name</label>
+          <input type="text" id="first_name" name="first_name" required>
+
+          <label for="last_name">Last Name</label>
+          <input type="text" id="last_name" name="last_name" required>
+
+          <label for="phone">Phone Number</label>
+          <input type="tel" id="phone" name="phone" placeholder="e.g. 081 234 5678" required>
+
+          <label for="address">Shipping Address</label>
+          <input type="text" id="address" name="address" placeholder="Street, suburb, city, postal code" required>
+
+          <button type="submit" class="btn">Continue to Payment</button>
+          <div class="note">You can create an account later from your receipt.</div>
+        </form>
+      </div>
+
+      <!-- Create an Account -->
+      <div class="card">
+        <h2>Create an Account</h2>
+        <p>Sign up to track your orders, save addresses, and speed up future checkouts.</p>
+        <a class="btn btn-outline" href="{{ url_for('signup') }}">Go to Sign Up</a>
+        <p class="note">Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

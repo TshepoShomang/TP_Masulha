@@ -1,0 +1,26 @@
+<div class="user-overlay">
+  <div class="user-panel">
+    <button class="close-user" aria-label="Close user panel">&times;</button>
+    {% if session.get('email') %}
+      <div class="user-info">
+        <h3>{{ user_first_name or '' }} {{ user_last_name or '' }}</h3>
+        <p>{{ session.get('email') }}</p>
+      </div>
+      {% if session.get('is_admin') %}
+        <div class="user-actions">
+          <a class="btn" href="{{ url_for('admin_dashboard') }}">Admin Dashboard</a>
+          <a class="btn" href="{{ url_for('admin_products_manage') }}">Manage Products</a>
+        </div>
+      {% endif %}
+      <div class="user-actions">
+        <a class="btn" href="{{ url_for('change_password') }}">Change Password</a>
+        <a class="btn btn-outline" href="{{ url_for('logout') }}">Logout</a>
+      </div>
+    {% else %}
+      <div class="user-actions">
+        <a class="btn" href="{{ url_for('login') }}">Login</a>
+        <a class="btn btn-outline" href="{{ url_for('signup') }}">Signup</a>
+      </div>
+    {% endif %}
+  </div>
+</div>

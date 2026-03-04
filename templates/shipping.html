@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Shipping Address</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="shipping_body">
+  <div class="shipping-container">
+    <h2>Shipping Address</h2>
+      <form method="POST" action="{{ url_for('shipping') }}">
+        <label for="address">Enter your shipping address</label>
+        <input type="text" id="address" name="address" placeholder="Street, Suburb, City, Postal Code" required>
+        <label for="phone">Phone Number</label>
+        <input type="tel" id="phone" name="phone" placeholder="e.g. 081 234 5678" required>
+        <button type="submit" class="shipping_button">Proceed to Checkout</button>
+      </form>
+    <p class="note">Logged in as <strong>{{ user }}</strong></p>
+  </div>
+</body>
+</html>

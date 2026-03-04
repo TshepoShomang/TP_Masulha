@@ -1,0 +1,38 @@
+<nav class="navbar">
+  <div class="container">
+    <!-- Left: User menu (always visible) -->
+    <div class="nav-left" style="flex:1; display:flex; align-items:center; gap:12px;">
+      <button class="user-btn" aria-label="User menu">
+        <span class="nav-icon"><i class="fas fa-user-circle" aria-hidden="true"></i></span>
+        {% if session.get('email') %}
+          {% set _name = ((user_first_name or '') ~ ((' ' ~ user_last_name) if user_last_name else ''))|trim %}
+          {% if not _name %}
+            {% set _name = session.get('firstname') or (session.get('email').split('@')[0] if session.get('email') else '') %}
+          {% endif %}
+          <span>{{ _name }}</span>
+        {% else %}
+          <span style="font-size:0.95rem;">Sign in</span>
+        {% endif %}
+      </button>
+    </div>
+
+    <!-- Center: Brand -->
+    <div class="nav-center" style="text-align:center;">
+      <a href="/" class="logo">TP<span class="active">Masuhla</span></a>
+    </div>
+
+    <!-- Right: Navigation links and cart -->
+    <div class="nav-right" style="flex:1; display:flex; justify-content:flex-end; align-items:center; gap:22px;">
+      <ul class="nav-links" style="display:flex; gap:22px; align-items:center; list-style:none; margin:0;">
+        <li><a href="/" class="{{ 'active' if request.path == '/' else '' }}">Home</a></li>
+        <li><a href="/services" class="{{ 'active' if request.path.startswith('/services') else '' }}">Services</a></li>
+        <li><a href="/products" class="{{ 'active' if request.path.startswith('/products') else '' }}">Products</a></li>
+      </ul>
+      <div class="cart-btn" aria-label="Cart" role="button" tabindex="0">
+        <span class="nav-icon"><i class="fas fa-cart-plus" aria-hidden="true"></i></span>
+        <div class="cart-items">{{ itemsInCart }}</div>
+      </div>
+    </div>
+  </div>
+</nav>
+{% include '_user_panel.html' %}

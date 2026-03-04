@@ -1,0 +1,106 @@
+document.addEventListener("DOMContentLoaded", function () {
+    const cartOverlay = document.querySelector(".cart-overlay");
+    const cart = document.querySelector(".cart");
+    const closeCartBtn = document.querySelector(".close-cart");
+    
+    
+    const cartBtn = document.querySelector(".cart-btn");
+
+    // Open cart
+    cartBtn.addEventListener("click", () => {
+        cart.classList.add("showCart");
+        cartOverlay.classList.add("transparentBcg");
+    });
+
+    // Close cart (X button)
+    closeCartBtn.addEventListener("click", () => {
+        cart.classList.remove("showCart");
+        cartOverlay.classList.remove("transparentBcg");
+    });
+
+    // Optional: close cart if you click on the semi-transparent background
+    cartOverlay.addEventListener("click", (e) => {
+        if (e.target === cartOverlay) {
+            cart.classList.remove("showCart");
+            cartOverlay.classList.remove("transparentBcg");
+        }
+    });
+});
+
+
+document.addEventListener("DOMContentLoaded", () => {
+    const buttons = document.querySelectorAll(".add-to-cart");
+
+    buttons.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const product = {
+                id: btn.dataset.id,
+                title: btn.dataset.title,
+                price: btn.dataset.price,
+                image: btn.dataset.image,
+            };
+
+            fetch("/add-to-cart", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(product),
+            })
+            .then(res => res.json())
+            .then(data => {
+                console.log("Cart updated:", data.cart);
+                alert(product.title + " added to cart!");
+            })
+            .catch(err => console.error(err));
+        });
+    });
+});
+
+// Quantity controls: prevent page refresh and update via fetch
+document.addEventListener("DOMContentLoaded", function () {
+  const cartContent = document.querySelector('.cart-content');
+  if (!cartContent) return;
+
+  cartContent.addEventListener('click', async function (e) {
+    const incBtn = e.target.closest('button.inc-btn');
+    const decBtn = e.target.closest('button.dec-btn');
+    if (!incBtn && !decBtn) return;
+
+    e.preventDefault();
+    const id = (incBtn || decBtn).dataset.id;
+    const endpoint = incBtn ? '/increase_cart' : '/decrease_cart';
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      if (!data || !data.ok) return;
+
+      // Update quantity text
+      const qtyEl = document.getElementById('qty-' + id);
+      if (qtyEl) qtyEl.textContent = data.new_quantity;
+
+      // Update cart total in footer
+      const totalEl = document.querySelector('.cart-total');
+      if (totalEl) totalEl.textContent = Number(data.cart_total).toFixed(2);
+
+      // Update navbar cart items count
+      const navCount = document.querySelector('.cart-items');
+      if (navCount) navCount.textContent = data.items_count;
+
+      // If item removed (quantity 0), remove its nodes from cart
+      if (data.removed) {
+        const controlsDiv = (incBtn || decBtn).closest('div');
+        const detailsDiv = controlsDiv ? controlsDiv.previousElementSibling : null;
+        const imgEl = detailsDiv ? detailsDiv.previousElementSibling : null;
+        if (controlsDiv) controlsDiv.remove();
+        if (detailsDiv) detailsDiv.remove();
+        if (imgEl) imgEl.remove();
+      }
+    } catch (err) {
+      console.error('Cart update failed', err);
+    }
+  });
+});

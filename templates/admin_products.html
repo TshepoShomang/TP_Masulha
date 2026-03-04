@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin · Products</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin_style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="admin-products-body">
+  {% include '_navbar.html' %}
+  <main class="admin-products-shell">
+    <section class="admin-hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Inventory Control</p>
+        <h1>Curate and launch your catalogue</h1>
+        <p class="subtext">
+          Update copy, swap images, adjust stock levels or spin up a brand-new product —
+          everything happens in one focused workspace.
+        </p>
+        <div class="hero-actions">
+          <a href="{{ url_for('admin_dashboard') }}" class="btn ghost">Back to dashboard</a>
+          <div class="hero-metric">
+            <strong>{{ products|length if products else 0 }}</strong>
+            <span>active products</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-card">
+        <p>Need to add something completely new?</p>
+        <button type="button" class="btn secondary" data-scroll="#createProduct">Jump to creator</button>
+      </div>
+    </section>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <section class="admin-alerts">
+      {% for category, message in messages %}
+        {% set level = ((category or 'info')|lower).replace(' ', '-') %}
+        <div class="flash flash-{{ level }}" role="status" data-flash-message data-flash-timeout="10000">{{ message }}</div>
+      {% endfor %}
+    </section>
+  {% endif %}
+{% endwith %}
+
+    <section class="admin-panels">
+      <div class="panel inventory-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Inventory</p>
+            <h2>Live catalogue</h2>
+          </div>
+          <span class="pill">{{ products|length if products else 0 }} items</span>
+        </div>
+        {% if products and products|length > 0 %}
+          <div class="product-grid">
+            {% for p in products %}
+              <article class="product-card">
+                <header class="product-card__header">
+                  <div>
+                    <p class="eyebrow">Product ID</p>
+                    <h3>#{{ p.id }}</h3>
+                  </div>
+                  <button type="button" class="icon-btn danger" onclick="confirmDelete({{ p.id }}, this)" aria-label="Delete product {{ p.id }}">
+                    &times;
+                  </button>
+                </header>
+                <form class="product-form" method="post" action="{{ url_for('admin_update_product') }}" enctype="multipart/form-data">
+                  <input type="hidden" name="id" value="{{ p.id }}">
+                  {% if has_image %}
+                    <div class="product-media">
+                      {% if p.image %}
+                        <img src="{{ url_for('static', filename=p.image) }}" alt="{{ p.name or 'Product image' }}">
+                      {% else %}
+                        <div class="placeholder-img">Upload an image</div>
+                      {% endif %}
+                      <label class="file-drop">
+                        <input type="file" name="image" accept="image/*">
+                        <span>Drop or browse</span>
+                      </label>
+                    </div>
+                  {% endif %}
+                  <div class="form-grid">
+                    <label>
+                      <span>Name</span>
+                      <input type="text" name="name" value="{{ p.name }}" required>
+                    </label>
+                    <label>
+                      <span>Price (R)</span>
+                      <input type="number" step="0.01" name="price" value="{{ '%.2f'|format(p.price) if p.price is not none else '' }}" required>
+                    </label>
+                    {% if has_quantity %}
+                      <label>
+                        <span>In stock</span>
+                        <input type="number" name="quantity" value="{{ p.quantity or 0 }}">
+                      </label>
+                    {% endif %}
+                  </div>
+                  {% if has_description %}
+                    <label>
+                      <span>Description</span>
+                      <textarea name="description" rows="3" placeholder="Short pitch">{{ p.description or '' }}</textarea>
+                    </label>
+                  {% endif %}
+                  <div class="form-actions">
+                    <button type="submit" class="btn primary">Save changes</button>
+                    <button type="button" class="btn text" onclick="confirmDelete({{ p.id }})">Delete</button>
+                  </div>
+                </form>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state">
+            <h3>No products yet</h3>
+            <p>Once items are added they will appear here with live editing controls.</p>
+            <button type="button" class="btn secondary" data-scroll="#createProduct">Add your first product</button>
+          </div>
+        {% endif %}
+      </div>
+
+      <aside class="panel create-panel" id="createProduct">
+        <p class="eyebrow">Quick create</p>
+        <h2>Add a new product</h2>
+        <p class="subtext">Complete the essentials and launch to the storefront immediately.</p>
+        <form class="create-form" method="post" action="{{ url_for('admin_add_product') }}" enctype="multipart/form-data">
+          <label>
+            <span>Name</span>
+            <input type="text" name="name" placeholder="E.g. Deluxe Starter Kit" required>
+          </label>
+          <label>
+            <span>Price (R)</span>
+            <input type="number" step="0.01" name="price" placeholder="399.00" required>
+          </label>
+          <label>
+            <span>Image</span>
+            <input type="file" name="image" accept="image/*" required>
+          </label>
+          <button type="submit" class="btn primary">Create product</button>
+        </form>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    document.addEventListener('click', (event) => {
+      const trigger = event.target.closest('[data-scroll]');
+      if (!trigger) return;
+      const target = document.querySelector(trigger.getAttribute('data-scroll'));
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+
+    async function confirmDelete(id, btn){
+      if(!confirm('Delete product #' + id + '?')) return;
+      const toggleLoader = window.toggleButtonLoading || function(){};
+      toggleLoader(btn, true);
+      try{
+        const res = await fetch('{{ url_for('admin_delete_product') }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        const data = await res.json();
+        if(data && data.ok){
+          location.reload();
+        }else{
+          alert('Unable to delete product right now.');
+        }
+      }catch(err){
+        console.error('delete failed', err);
+        alert('Unable to delete product right now.');
+      }finally{
+        toggleLoader(btn, false);
+      }
+    }
+  </script>
+  {% include '_cart.html' %}
+</body>
+</html>

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Our Services - CleanX</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.1/css/all.css">
+</head>
+<body>
+  
+  {% include '_navbar.html' %}
+
+  <main class="services-shell">
+    <!-- Hero -->
+    <section class="services-hero">
+      <div>
+        <p class="eyebrow">Signature services</p>
+        <h1>Specialized cleaning for homes, offices & high-touch environments</h1>
+        <p>Choose a curated plan or build a bespoke package. Every booking comes with vetted teams, eco supplies, and digital reporting.</p>
+        <div class="hero-actions">
+          <a href="#service-pricing" class="btn primary">View pricing</a>
+          <a href="#service-book" class="btn ghost">Schedule now</a>
+        </div>
+      </div>
+      <div class="hero-highlights">
+        <article>
+          <h3>4.9/5 rating</h3>
+          <p>Based on 2,000+ recurring customers across Gauteng.</p>
+        </article>
+        <article>
+          <h3>Concierge support</h3>
+          <p>Live updates, crew tracking, and after-service checklists.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- Service tiers -->
+    <section class="services-pricing" id="service-pricing">
+      <header>
+        <p class="eyebrow">Packages</p>
+        <h2>Pick the right scope</h2>
+        <p>Flexible pricing that scales with your space and cadence.</p>
+      </header>
+      <div class="pricing-grid">
+        <article class="pricing-card">
+          <h3>Basic Care</h3>
+          <p class="price">R300</p>
+          <p class="subtitle">Weekly upkeep for small apartments or light-touch offices.</p>
+          <ul>
+            <li>Surface dust & sanitize</li>
+            <li>Floors (vacuum + mop)</li>
+            <li>Bathroom refresh</li>
+          </ul>
+        </article>
+        <article class="pricing-card featured">
+          <span class="badge">Most booked</span>
+          <h3>Deep Reset</h3>
+          <p class="price">R600</p>
+          <p class="subtitle">Quarterly top-to-bottom detail with appliance care.</p>
+          <ul>
+            <li>Kitchen & bathroom detail</li>
+            <li>Appliance interiors</li>
+            <li>High-touch disinfect</li>
+          </ul>
+        </article>
+        <article class="pricing-card">
+          <h3>Corporate Care</h3>
+          <p class="price">R1200</p>
+          <p class="subtitle">Scaled cleaning for offices, studios, and storefronts.</p>
+          <ul>
+            <li>Desk-safe practices</li>
+            <li>Meeting room resets</li>
+            <li>Consumable restock</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- Application Form -->
+  <section class="application-form" id="service-book">
+    <div class="container">
+      <div class="form-head">
+        <div>
+          <p class="eyebrow">Book a service</p>
+          <h2>Lock in a slot</h2>
+          <p>Tell us your details and preferred window; we’ll confirm within minutes.</p>
+        </div>
+        <div class="summary">
+          <div>Total: <strong>R<span id="service-total">0</span></strong></div>
+        </div>
+      </div>
+      <form id="service-booking-form" action="{{ url_for('service_book') }}" method="POST" novalidate>
+        <div class="grid-2">
+          <div>
+            <label for="full_name">Full Name</label>
+            <input type="text" id="full_name" name="full_name" required>
+          </div>
+          <div>
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" required>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" name="phone" placeholder="e.g. 0712345678" required>
+          </div>
+          <div>
+            <label for="service_type">Service Type</label>
+            <select id="service_type" name="service_type" required>
+              <option value="Basic Cleaning" data-price="300">Basic Cleaning - R300</option>
+              <option value="Deep Cleaning" data-price="600">Deep Cleaning - R600</option>
+              <option value="Office Cleaning" data-price="1200">Office Cleaning - R1200</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label for="address">Address</label>
+          <input type="text" id="address" name="address" placeholder="Street and number" required>
+        </div>
+
+        <div class="grid-3">
+          <div>
+            <label for="city">City</label>
+            <input type="text" id="city" name="city" required>
+          </div>
+          <div>
+            <label for="postcode">Postal Code</label>
+            <input type="text" id="postcode" name="postcode" required>
+          </div>
+          <div>
+            <label for="frequency">Frequency</label>
+            <select id="frequency" name="frequency" required>
+              <option value="once">Once</option>
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Every 2 weeks</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <label for="date">Preferred Date</label>
+            <input type="date" id="date" name="date" required>
+          </div>
+          <div>
+            <label for="time_window">Time Window</label>
+            <select id="time_window" name="time_window" required>
+              <option value="08:00-10:00">08:00-10:00</option>
+              <option value="10:00-12:00">10:00-12:00</option>
+              <option value="12:00-14:00">12:00-14:00</option>
+              <option value="14:00-16:00">14:00-16:00</option>
+            </select>
+          </div>
+        </div>
+
+        <fieldset class="extras">
+          <legend>Extras</legend>
+          <label><input type="checkbox" name="extra_fridge" value="1" data-price="80"> Inside Fridge (+R80)</label>
+          <label><input type="checkbox" name="extra_oven" value="1" data-price="100"> Inside Oven (+R100)</label>
+          <label><input type="checkbox" name="extra_windows" value="1" data-price="120"> Windows (+R120)</label>
+          <label><input type="checkbox" name="extra_laundry" value="1" data-price="70"> Laundry (+R70)</label>
+          <label><input type="checkbox" name="extra_pets" value="1" data-price="50"> Pet Hair (+R50)</label>
+        </fieldset>
+
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" rows="3" placeholder="Special instructions, access details, gate code, etc."></textarea>
+
+        <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+          <button type="submit" class="btn">Proceed to Secure Payment</button>
+          <a href="{{ url_for('login') }}" class="btn btn-outline" id="login-link" style="display:none;">Login</a>
+        </div>
+      </form>
+    </div>
+  </section>
+  </main>
+
+  <!-- Guest modal -->
+  <div id="guestModal" class="modal" style="display:none;">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="guestModalTitle">
+      <div class="modal-header">
+        <h3 id="guestModalTitle">Continue as guest?</h3>
+        <button type="button" class="btn btn-outline" data-close-modal>&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>You are not signed in. You can continue as a guest and we’ll use the contact details you entered for this booking.</p>
+      </div>
+      <div class="modal-footer" style="display:flex; gap:8px; justify-content:flex-end;">
+        <a class="btn btn-outline" href="{{ url_for('login') }}">Login</a>
+        <button type="button" class="btn" id="continueGuest">Continue as Guest</button>
+      </div>
+    </div>
+  </div>
+
+  {% include '_footer.html' %}
+
+  <script>
+    (function(){
+      const loggedIn = {{ 'true' if session.get('email') else 'false' }};
+      const form = document.getElementById('service-booking-form');
+      const serviceSelect = document.getElementById('service_type');
+      const totalEl = document.getElementById('service-total');
+      const extras = Array.from(document.querySelectorAll('fieldset.extras input[type="checkbox"]'));
+      const loginLink = document.getElementById('login-link');
+      if (!loggedIn && loginLink) loginLink.style.display = 'inline-flex';
+
+      function calcTotal(){
+        const base = parseFloat(serviceSelect.selectedOptions[0].dataset.price || '0');
+        let sum = base;
+        extras.forEach(cb => { if (cb.checked) sum += parseFloat(cb.dataset.price || '0'); });
+        totalEl.textContent = sum.toFixed(2);
+      }
+      serviceSelect.addEventListener('change', calcTotal);
+      extras.forEach(cb => cb.addEventListener('change', calcTotal));
+      calcTotal();
+
+      // Guest modal
+      const modal = document.getElementById('guestModal');
+      const openGuest = () => { modal.style.display = 'block'; document.body.classList.add('modal-open'); };
+      const closeGuest = () => { modal.style.display = 'none'; document.body.classList.remove('modal-open'); };
+      modal.addEventListener('click', (e)=>{
+        if (e.target.matches('[data-close-modal]') || e.target.closest('[data-close-modal]')) closeGuest();
+      });
+      document.getElementById('continueGuest').addEventListener('click', ()=>{ closeGuest(); form.submit(); });
+
+      form.addEventListener('submit', function(e){
+        if (!loggedIn){
+          e.preventDefault();
+          openGuest();
+        }
+      });
+    })();
+  </script>
+
+</body>
+</html>

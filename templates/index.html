@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cleaning Company</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    {% include '_navbar.html' %}
+    <div class="success-message">
+        <h1>Welcome to Our Cleaning Company</h1>
+        <p>
+            <a href="/booking">Book a Service</a> |
+            <a href="/products">Shop Products</a>
+        </p>
+    </div>
+    {% include '_cart.html' %}
+</body>
+</html>

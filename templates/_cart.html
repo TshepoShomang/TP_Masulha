@@ -1,0 +1,119 @@
+<div class="cart-overlay">
+  <div class="cart">
+    <span class="close-cart">
+      <i class="fas fa-window-close"></i>
+    </span>
+    <h2>your cart</h2>
+    <div class="cart-content">
+      <div class="cart-item">
+        {% for item in (cart or []) %}
+          <img src="{{ url_for('static', filename=item.image) }}" alt="product">
+          <div>
+            <h4>{{ item.name }}</h4>
+            <h5>{{ item.price }}</h5>
+            <form method="POST" action="{{ url_for('remove_from_cart') }}">
+              <input type="hidden" name="id" value="{{ item.id }}">
+              <input type="hidden" name="quantity" value="{{ item.quantity }}">
+              <button class="remove-item">remove</button>
+            </form>
+          </div>
+          <div>
+            <form method="POST" action="{{ url_for('increase_cart') }}">
+              <input type="hidden" name="id" value="{{ item.id }}">
+              <input type="hidden" name="quantity" value="{{ item.quantity }}">
+              <button class="fas fa-chevron-up inc-btn" data-id="{{ item.id }}"></button>
+            </form>
+            <p class="item-amount" id="qty-{{ item.id }}">{{ item.quantity }}</p>
+            <form method="POST" action="{{ url_for('decrease_cart') }}">
+              <input type="hidden" name="id" value="{{ item.id }}">
+              <input type="hidden" name="quantity" value="{{ item.quantity }}">
+              <button class="fas fa-chevron-down dec-btn" data-id="{{ item.id }}"></button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+      <!--end cart item-->
+    </div>
+    <div class="cart-footer">
+      <h3>your total : R <span class="cart-total">{{ (cartTotal or 0) }}</span></h3>
+      <form action="{{ url_for('clearCart') }}" method="post">
+        <button class="clear-cart banner-btn">clear cart</button>
+      </form>
+      <form action="{{ url_for('shipping') }}" method="post">
+        <button type="submit" class="check-out banner-btn">Check Out</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    const cartContent = document.querySelector('.cart-content');
+    if (cartContent) {
+      cartContent.addEventListener('click', async function(e){
+        const removeBtn = e.target.closest('button.remove-item');
+        if (!removeBtn) return;
+        e.preventDefault();
+        const toggleLoader = window.toggleButtonLoading || function(){};
+        toggleLoader(removeBtn, true);
+        try {
+          const form = removeBtn.closest('form');
+          const idInput = form ? form.querySelector('input[name="id"]') : null;
+          const id = idInput ? idInput.value : removeBtn.dataset.id;
+          const res = await fetch('{{ url_for('remove_from_cart') }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          const data = await res.json();
+          if (!data || !data.ok) return;
+
+          const firstDetailsDiv = removeBtn.closest('div');
+          const imgEl = firstDetailsDiv ? firstDetailsDiv.previousElementSibling : null;
+          const secondControlsDiv = firstDetailsDiv ? firstDetailsDiv.nextElementSibling : null;
+          if (secondControlsDiv) secondControlsDiv.remove();
+          if (firstDetailsDiv) firstDetailsDiv.remove();
+          if (imgEl) imgEl.remove();
+
+          const totalEl = document.querySelector('.cart-total');
+          if (totalEl) totalEl.textContent = Number(data.cart_total).toFixed(2);
+          const navCount = document.querySelector('.cart-items');
+          if (navCount) navCount.textContent = data.items_count;
+        } catch (err) {
+          console.error('Remove failed', err);
+        } finally {
+          toggleLoader(removeBtn, false);
+        }
+      });
+    }
+
+    const clearBtn = document.querySelector('.clear-cart');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', async function(e){
+        e.preventDefault();
+        const toggleLoader = window.toggleButtonLoading || function(){};
+        toggleLoader(clearBtn, true);
+        try{
+          const res = await fetch('{{ url_for('clearCart') }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          const data = await res.json();
+          if (!data || !data.ok) return;
+          const cartContent = document.querySelector('.cart-content');
+          if (cartContent) cartContent.innerHTML = '<div class="cart-item"></div>';
+          const totalEl = document.querySelector('.cart-total');
+          if (totalEl) totalEl.textContent = '0.00';
+          const navCount = document.querySelector('.cart-items');
+          if (navCount) navCount.textContent = '0';
+        }catch(err){
+          console.error('Clear cart failed', err);
+        }finally{
+          toggleLoader(clearBtn, false);
+        }
+      });
+    }
+  });
+</script>
