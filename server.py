@@ -788,9 +788,36 @@ def add_to_cart():
         session["cart"] = cart
         session["itemsInCart"] = items_count
         session["cartTotal"] = cart_total
+        cart_payload = []
+        for it in cart:
+            try:
+                qty = int(it.get("quantity", 1))
+            except Exception:
+                qty = 1
+            try:
+                price_val = float(it.get("price", 0.0))
+            except Exception:
+                price_val = 0.0
+            image_val = it.get("image")
+            image_url = None
+            if image_val:
+                try:
+                    image_url = url_for("static", filename=str(image_val).lstrip("/"))
+                except Exception:
+                    image_url = f"/static/{str(image_val).lstrip('/')}"
+            cart_payload.append({
+                "id": it.get("id"),
+                "name": it.get("name") or it.get("title"),
+                "title": it.get("title") or it.get("name"),
+                "price": price_val,
+                "quantity": qty,
+                "image": image_val,
+                "image_url": image_url,
+            })
         if request.is_json:
             payload = {"ok": ok, "items_count": items_count, "cart_total": cart_total}
             payload.update(extra)
+            payload["cart"] = cart_payload
             return jsonify(payload), status
         return redirect(url_for("products"))
 

@@ -28,6 +28,66 @@ function toggleButtonLoading(btn, isLoading) {
 }
 
 window.toggleButtonLoading = toggleButtonLoading;
+function escapeHtml(str) {
+    if (str === null || str === undefined) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function renderCartItems(cart) {
+    const cartContent = document.querySelector('.cart-content');
+    if (!cartContent) return;
+    if (!cart || !cart.length) {
+        cartContent.innerHTML = '<div class="cart-item empty-cart"><p>Your cart is empty.</p></div>';
+        return;
+    }
+    const buildImageSrc = (item) => {
+        if (item && item.image_url) return item.image_url;
+        if (item && item.image) {
+            const cleaned = String(item.image).replace(/^\/+/, "");
+            return `/static/${cleaned}`;
+        }
+        return "https://via.placeholder.com/80?text=Item";
+    };
+    const html = cart.map((item) => {
+        const id = escapeHtml(item.id ?? "");
+        const name = escapeHtml(item.name || item.title || "Item");
+        const priceVal = typeof item.price === "number" ? item.price : parseFloat(item.price || 0);
+        const qty = typeof item.quantity === "number" ? item.quantity : parseInt(item.quantity || 1, 10) || 1;
+        const imageSrc = buildImageSrc(item);
+        return `
+        <div class="cart-item">
+          <img src="${imageSrc}" alt="${name}">
+          <div>
+            <h4>${name}</h4>
+            <h5>R${isNaN(priceVal) ? "0.00" : priceVal.toFixed(2)}</h5>
+            <form method="POST" action="/remove-from-cart">
+              <input type="hidden" name="id" value="${id}">
+              <button class="remove-item" type="submit">remove</button>
+            </form>
+          </div>
+          <div>
+            <form method="POST" action="/increase_cart">
+              <input type="hidden" name="id" value="${id}">
+              <button class="fas fa-chevron-up inc-btn" data-id="${id}" type="submit"></button>
+            </form>
+            <p class="item-amount" id="qty-${id}">${qty}</p>
+            <form method="POST" action="/decrease_cart">
+              <input type="hidden" name="id" value="${id}">
+              <button class="fas fa-chevron-down dec-btn" data-id="${id}" type="submit"></button>
+            </form>
+          </div>
+        </div>
+        `;
+    }).join("");
+    cartContent.innerHTML = html;
+}
+
+window.renderCartItems = renderCartItems;
 
 document.addEventListener("DOMContentLoaded", function () {
     const cartOverlay = document.querySelector(".cart-overlay");
@@ -94,8 +154,18 @@ document.addEventListener("DOMContentLoaded", () => {
                     body: JSON.stringify(product),
                 });
                 const data = await res.json();
-                console.log("Cart updated:", data.cart);
-                alert(product.title + " added to cart!");
+                const navCount = document.querySelector(".cart-items");
+                if (navCount && typeof data.items_count !== "undefined") {
+                    navCount.textContent = data.items_count;
+                }
+                const totalEl = document.querySelector(".cart-total");
+                if (totalEl && typeof data.cart_total !== "undefined") {
+                    totalEl.textContent = Number(data.cart_total).toFixed(2);
+                }
+                if (Array.isArray(data.cart)) {
+                    renderCartItems(data.cart);
+                }
+                alert((data && data.message) || (product.title + " added to cart!"));
             } catch (err) {
                 console.error(err);
                 alert("Unable to add item to cart right now.");
@@ -164,6 +234,9 @@ document.addEventListener("DOMContentLoaded", function () {
                     totalEl.textContent = Number(data.cart_total).toFixed(2);
                 }
                 const itemName = formData.get("title") || "Item";
+                if (Array.isArray(data.cart)) {
+                    renderCartItems(data.cart);
+                }
                 alert(data.message || `${itemName} added to cart!`);
             } catch (err) {
                 console.error("Add to cart failed", err);
