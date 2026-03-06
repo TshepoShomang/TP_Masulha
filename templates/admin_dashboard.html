@@ -92,21 +92,31 @@
               <ul id="productOrdersList" class="orders-list">
                 {% for o in orders %}
                   <li class="{{ 'order-new' if not o.viewed else '' }}">
-                    <div class="order-meta">
-                      <div>
-                        <strong>#{{ o.id }}</strong>
-                        <span>
-                          {% set _order_name = (o.full_name if o.full_name else ((o.first_name or '') ~ ' ' ~ (o.last_name or ''))) | trim %}
-                          {{ _order_name if _order_name else (o.user_email or 'Guest') }}
-                          {% if o.phone %}&nbsp;·&nbsp;{{ o.phone }}{% endif %}
-                        </span>
-                      </div>
-                      <div class="order-tags">
+                  <div class="order-meta">
+                    <div>
+                      <strong>#{{ o.id }}</strong>
+                      <span>
+                        {% set _order_name = (o.full_name if o.full_name else ((o.first_name or '') ~ ' ' ~ (o.last_name or ''))) | trim %}
+                        {{ _order_name if _order_name else (o.user_email or 'Guest') }}
+                        {% if o.phone %}&nbsp;·&nbsp;{{ o.phone }}{% endif %}
+                      </span>
+                    </div>
+                    <div class="order-tags">
                         <span class="badge">{{ o.items }} items</span>
                         <span class="badge">R{{ '%.2f'|format(o.total_amount) }}</span>
                         {% if not o.viewed %}<span class="badge badge--new">New</span>{% endif %}
                       </div>
                     </div>
+                    {% if o.items_list %}
+                      <ul class="order-items-preview">
+                        {% for item in o.items_list[:4] %}
+                          <li>{{ item.quantity }} × {{ item.name }}</li>
+                        {% endfor %}
+                        {% if o.items_list|length > 4 %}
+                          <li class="more-items">+ {{ o.items_list|length - 4 }} more</li>
+                        {% endif %}
+                      </ul>
+                    {% endif %}
                     <div class="order-actions">
                       <form method="post" action="{{ url_for('admin_mark_viewed') }}" onsubmit="return markViewed(event, {{ o.id }})">
                         <input type="hidden" name="order_id" value="{{ o.id }}">
@@ -374,7 +384,7 @@
             tbody.appendChild(tr);
           });
         }
-        modal.style.display = 'block';
+        modal.style.display = 'flex';
         document.body.classList.add('modal-open');
       }catch(err){
         console.error('open order modal failed', err);

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, send_from_directory
 from functools import wraps
 import psycopg2  # PostgreSQL driver
 
@@ -28,6 +28,11 @@ app = Flask(__name__)
 
 app.secret_key = os.getenv("SECRET_KEY")
 
+UPLOAD_ROOT = os.getenv("UPLOAD_ROOT") or os.path.join(app.root_path, "uploads")
+app.config["UPLOAD_ROOT"] = UPLOAD_ROOT
+PRODUCT_UPLOAD_SUBDIR = os.getenv("PRODUCT_UPLOAD_SUBDIR", "products")
+app.config["PRODUCT_UPLOAD_SUBDIR"] = PRODUCT_UPLOAD_SUBDIR
+os.makedirs(os.path.join(app.config["UPLOAD_ROOT"], PRODUCT_UPLOAD_SUBDIR), exist_ok=True)
 
 def _should_expose_reset_link() -> bool:
     """Return True when we can surface the reset link in logs/UI (dev mode)."""
@@ -45,6 +50,25 @@ def is_valid_email(address: str) -> bool:
     if not address:
         return False
     return EMAIL_PATTERN.match(address.strip()) is not None
+
+
+def build_media_url(path: str | None) -> str:
+    """Return a public URL for either static or uploaded product assets."""
+    if not path:
+        return url_for("static", filename="images/product-1.jpeg")
+    path_str = str(path).strip()
+    if not path_str:
+        return url_for("static", filename="images/product-1.jpeg")
+    if path_str.startswith("http://") or path_str.startswith("https://"):
+        return path_str
+    cleaned = path_str.lstrip("/")
+    static_candidate = os.path.join(app.static_folder, cleaned)
+    if os.path.isfile(static_candidate):
+        return url_for("static", filename=cleaned)
+    upload_candidate = os.path.join(app.config["UPLOAD_ROOT"], cleaned)
+    if os.path.isfile(upload_candidate):
+        return url_for("serve_upload", filename=cleaned)
+    return url_for("static", filename=cleaned)
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -189,6 +213,19 @@ def send_order_confirmation_email(
             address=shipping_address or "",
         )
     return send_email(recipient, subject, body, purpose="order confirmation email")
+
+
+@app.context_processor
+def inject_media_helpers():
+    return {
+        "product_image_url": build_media_url,
+    }
+
+
+@app.route("/uploads/<path:filename>")
+def serve_upload(filename: str):
+    safe_path = filename.strip("/")
+    return send_from_directory(app.config["UPLOAD_ROOT"], safe_path)
 
 
 def get_reset_serializer() -> URLSafeTimedSerializer:
@@ -799,12 +836,7 @@ def add_to_cart():
             except Exception:
                 price_val = 0.0
             image_val = it.get("image")
-            image_url = None
-            if image_val:
-                try:
-                    image_url = url_for("static", filename=str(image_val).lstrip("/"))
-                except Exception:
-                    image_url = f"/static/{str(image_val).lstrip('/')}"
+            image_url = build_media_url(image_val)
             cart_payload.append({
                 "id": it.get("id"),
                 "name": it.get("name") or it.get("title"),
@@ -1966,14 +1998,98 @@ def admin_dashboard():
 
     # Aggregate items per order for quick glance
     items_per_order = {}
+    order_items_summary = {}
     try:
         cur.execute("SELECT order_id, SUM(quantity) as items FROM OrderItems GROUP BY order_id")
         for (oid, items) in cur.fetchall():
             items_per_order[int(oid)] = int(items)
     except Exception:
         pass
+
+    # Build product name lookup
+    product_names = {}
+    try:
+        prod_cols = {c.lower(): c for c in table_columns(conn, 'Products')}
+        if prod_cols:
+            prod_id_col = table_id_column(conn, 'Products', ("id", "product_id", "ProductID", "productid"))
+            prod_name_col = None
+            for cand in ("name", "title", "product_name"):
+                if cand in prod_cols:
+                    prod_name_col = prod_cols[cand]
+                    break
+            if not prod_name_col:
+                prod_name_col = next((actual for key, actual in prod_cols.items() if "name" in key), None)
+            if prod_name_col:
+                prod_cur = conn.cursor()
+                try:
+                    prod_cur.execute(f"SELECT {prod_id_col}, {prod_name_col} FROM Products")
+                    for pid, pname in prod_cur.fetchall():
+                        if pid is None:
+                            continue
+                        product_names[str(pid)] = pname
+                finally:
+                    prod_cur.close()
+    except Exception:
+        pass
+
+    # Collect order item summaries
+    try:
+        oi_cols = {c.lower(): c for c in table_columns(conn, 'OrderItems')}
+        order_fk = None
+        prod_fk = None
+        qty_col = None
+        if oi_cols:
+            for cand in ("order_id", "OrderID", "orderid"):
+                if cand.lower() in oi_cols:
+                    order_fk = oi_cols[cand.lower()]
+                    break
+            for cand in ("product_id", "ProductID", "productid"):
+                if cand.lower() in oi_cols:
+                    prod_fk = oi_cols[cand.lower()]
+                    break
+            for cand in ("quantity", "qty", "amount"):
+                if cand in oi_cols:
+                    qty_col = oi_cols[cand]
+                    break
+        if order_fk and prod_fk:
+            select_cols = [f"{order_fk} AS order_id", f"{prod_fk} AS product_id"]
+            if qty_col:
+                select_cols.append(qty_col)
+            cur.execute(f"SELECT {', '.join(select_cols)} FROM OrderItems")
+            for row in cur.fetchall():
+                if not row:
+                    continue
+                order_val = row[0]
+                prod_val = row[1] if len(row) > 1 else None
+                qty_val = 1
+                if qty_col and len(row) > 2 and row[2] is not None:
+                    try:
+                        qty_val = int(row[2])
+                    except Exception:
+                        qty_val = 1
+                try:
+                    order_id = int(order_val)
+                except Exception:
+                    continue
+                prod_label = None
+                if prod_val is not None:
+                    key = str(prod_val)
+                    prod_label = product_names.get(key)
+                    if prod_label is None:
+                        try:
+                            prod_label = product_names.get(str(int(prod_val)))
+                        except Exception:
+                            prod_label = None
+                if not prod_label and prod_val is not None:
+                    prod_label = f"Product #{prod_val}"
+                entry = order_items_summary.setdefault(order_id, [])
+                entry.append({"name": prod_label or "Product", "quantity": qty_val})
+    except Exception as exc:
+        app.logger.debug("order items summary error: %s", exc)
+
     for o in orders:
         o["items"] = items_per_order.get(o["id"], 0)
+        o["items_list"] = order_items_summary.get(o["id"], [])
 
     # Product stats: quantities and revenue (dynamic column resolution)
     product_stats = []
@@ -2492,7 +2608,7 @@ def admin_update_product():
                                     break
                             except Exception:
                                 continue
-                dest_dir = os.path.join(app.static_folder, 'images')
+                dest_dir = os.path.join(app.config["UPLOAD_ROOT"], app.config["PRODUCT_UPLOAD_SUBDIR"])
                 os.makedirs(dest_dir, exist_ok=True)
                 original = secure_filename(file.filename)
                 base, ext = os.path.splitext(original)
@@ -2501,7 +2617,7 @@ def admin_update_product():
                     ext = '.jpg'
                 filename = f"product-{int(time.time())}{ext}"
                 dest_path = os.path.join(dest_dir, filename)
-                image_rel_path = f"images/{filename}"
+                image_rel_path = f"{app.config['PRODUCT_UPLOAD_SUBDIR']}/{filename}"
                 if Image is not None:
                     img = Image.open(file.stream)
                     try: img = img.convert('RGB')
@@ -2595,7 +2711,7 @@ def admin_add_product():
                     continue
 
     # Ensure destination directory exists
-    dest_dir = os.path.join(app.static_folder, 'images')
+    dest_dir = os.path.join(app.config["UPLOAD_ROOT"], app.config["PRODUCT_UPLOAD_SUBDIR"])
     try:
         os.makedirs(dest_dir, exist_ok=True)
     except Exception:
@@ -2612,7 +2728,7 @@ def admin_add_product():
     dest_path = os.path.join(dest_dir, filename)
 
     # Process and save image (resize to target_size if possible)
-    image_rel_path = f"images/{filename}"
+    image_rel_path = f"{app.config['PRODUCT_UPLOAD_SUBDIR']}/{filename}"
     try:
         if Image is not None:
             img = Image.open(file.stream)

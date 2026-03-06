@@ -70,7 +70,7 @@
                   {% if has_image %}
                     <div class="product-media">
                       {% if p.image %}
-                        <img src="{{ url_for('static', filename=p.image) }}" alt="{{ p.name or 'Product image' }}">
+                        <img src="{{ product_image_url(p.image) }}" alt="{{ p.name or 'Product image' }}">
                       {% else %}
                         <div class="placeholder-img">Upload an image</div>
                       {% endif %}

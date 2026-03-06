@@ -555,6 +555,23 @@ body.admin-dashboard-body .btn:hover {
   flex-wrap: wrap;
 }
 
+.order-items-preview {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.order-items-preview li {
+  list-style: disc;
+}
+
+.order-items-preview .more-items {
+  font-style: italic;
+  color: var(--ink);
+}
+
 .order-actions {
   display: flex;
   gap: 12px;
@@ -749,4 +766,94 @@ body.admin-dashboard-body .btn:hover {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+.modal {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+}
+
+.modal.show,
+.modal[style*="block"],
+.modal[style*="flex"] {
+  display: flex;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.65);
+  backdrop-filter: blur(2px);
+}
+
+.modal-dialog {
+  position: relative;
+  background: linear-gradient(135deg, #0b1220 0%, #111c2e 100%);
+  color: #e2e8f0;
+  border-radius: 20px;
+  box-shadow: 0 30px 80px rgba(2, 6, 23, 0.65);
+  padding: 0;
+  width: min(760px, 94vw);
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header .btn.btn-outline {
+  border: 1px solid rgba(226, 232, 240, 0.3);
+  color: #0f172a;
+  background: #e2e8f0;
+  font-size: 1.2rem;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 50%;
+  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.25);
+}
+
+.modal-header .btn.btn-outline:hover {
+  background: #f8fafc;
+}
+
+.modal-dialog {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.modal-body {
+  padding: 24px;
+  overflow-y: auto;
+  background: transparent;
+  color: inherit;
+}
+
+.modal-grid dt {
+  color: #475569;
+}
+
+.modal-grid dd {
+  color: #0f172a;
+}
+
+.modal-table th,
+.modal-table td {
+  color: #0f172a;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.modal-table th {
+  color: #475569;
 }
