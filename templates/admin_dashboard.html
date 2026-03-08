@@ -123,6 +123,11 @@
                         <button class="btn subtle" type="submit">Mark viewed</button>
                       </form>
                       <button type="button" class="btn ghost" onclick="openOrderDetails({{ o.id }}, this)">Details</button>
+                      <button type="button"
+                              class="btn text"
+                              data-order-id="{{ o.id }}"
+                              data-delete-url="{{ url_for('admin_delete_single_order', order_id=o.id) }}"
+                              onclick="deleteIncomingOrder(this)">Delete</button>
                     </div>
                   </li>
                 {% endfor %}
@@ -218,19 +223,17 @@
         </div>
       </div>
       {% if grantable_users %}
-        <form class="promote-form" method="post" action="{{ url_for('admin_promote_user') }}">
+        <form class="promote-form" id="adminPromoteForm" onsubmit="return false;">
           <label>
-            <span>Select user</span>
-            <div class="combo-field">
-              <input type="search" class="combo-search" placeholder="Search email..." data-filter-select="#adminPromoteSelect">
-              <select id="adminPromoteSelect" name="email" size="6" required>
-                {% for email in grantable_users %}
-                  <option value="{{ email }}">{{ email }}</option>
-                {% endfor %}
-              </select>
-            </div>
+            <span>Available users</span>
+            <select id="adminUserSelect" data-promote-url="{{ url_for('admin_promote_user') }}" required>
+              <option value="">Select a user…</option>
+              {% for email in grantable_users %}
+                <option value="{{ email }}">{{ email }}</option>
+              {% endfor %}
+            </select>
           </label>
-          <button type="submit" class="btn primary">Give admin access</button>
+          <small class="promote-hint">Selecting a user will immediately grant admin rights.</small>
         </form>
       {% else %}
         <div class="empty-state">
@@ -388,7 +391,11 @@
         document.body.classList.add('modal-open');
       }catch(err){
         console.error('open order modal failed', err);
-        alert('Unable to load order details right now.');
+        if (window.showToast) {
+          window.showToast('Unable to load order details right now.', 'error');
+        } else {
+          console.warn('Unable to load order details right now.');
+        }
       }finally{
         toggleLoader(btn, false);
       }
@@ -456,28 +463,87 @@
         closeOrderModal();
       }
     });
-    document.addEventListener('input', (event) => {
-      const target = event.target;
-      if(!target.matches('[data-filter-select]')){
-        return;
-      }
-      const select = document.querySelector(target.getAttribute('data-filter-select'));
-      if(!select){
-        return;
-      }
-      const term = target.value.trim().toLowerCase();
-      let firstVisible = null;
-      Array.from(select.options).forEach(opt => {
-        const match = opt.value.toLowerCase().includes(term);
-        opt.hidden = !match;
-        if(match && !firstVisible){
-          firstVisible = opt;
+    (function setupAdminPromote(){
+      const select = document.getElementById('adminUserSelect');
+      if(!select) return;
+      const promoteUrl = select.dataset.promoteUrl;
+      select.addEventListener('change', async function(){
+        const email = select.value;
+        if(!email) return;
+        if(!confirm(`Grant admin rights to ${email}?`)){
+          select.value = '';
+          return;
+        }
+        select.disabled = true;
+        try{
+          const res = await fetch(promoteUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({ email })
+          });
+          const data = await res.json();
+          if(data && data.ok){
+            if(window.showToast){
+              window.showToast(data.message || `${email} promoted.`, 'success');
+            }
+            const option = select.querySelector(`option[value="${email}"]`);
+            if(option) option.remove();
+            const remaining = Array.from(select.options).filter(opt => opt.value);
+            if(remaining.length === 0){
+              select.innerHTML = '<option value=\"\">No users remaining</option>';
+              select.disabled = true;
+            } else {
+              select.value = '';
+            }
+          }else{
+            if(window.showToast){
+              window.showToast(data?.message || 'Unable to promote user.', 'error');
+            }
+          }
+        }catch(err){
+          console.error('promote user failed', err);
+          if(window.showToast){
+            window.showToast('Unable to promote user.', 'error');
+          }
+        }finally{
+          select.disabled = false;
         }
       });
-      if(firstVisible){
-        select.value = firstVisible.value;
-      }
-    });
+    })();
+
+    function deleteIncomingOrder(btn){
+      if(!btn) return;
+      const id = btn.dataset.orderId;
+      const url = btn.dataset.deleteUrl;
+      if(!id || !url) return;
+      if(!confirm(`Delete order #${id}?`)) return;
+      const toggleLoader = window.toggleButtonLoading || function(){};
+      toggleLoader(btn, true);
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' }
+      }).then(res => res.json()).then(data => {
+        if(data && data.ok){
+          if(window.showToast){
+            window.showToast(data.message || `Order #${id} deleted.`, 'success');
+          }
+          const li = btn.closest('li');
+          if(li) li.remove();
+        }else{
+          if(window.showToast){
+            window.showToast(data?.message || 'Unable to delete order.', 'error');
+          }
+        }
+      }).catch(err => {
+        console.error('delete order failed', err);
+        if(window.showToast){
+          window.showToast('Unable to delete order.', 'error');
+        }
+      }).finally(() => toggleLoader(btn, false));
+    }
   </script>
   <script>
     // Admin tabs (products/services) with smooth transitions and AJAX loading

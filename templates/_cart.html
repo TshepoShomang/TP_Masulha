@@ -46,7 +46,6 @@
   </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
   document.addEventListener('DOMContentLoaded', function(){
     const cartContent = document.querySelector('.cart-content');
@@ -80,6 +79,9 @@
           if (totalEl) totalEl.textContent = Number(data.cart_total).toFixed(2);
           const navCount = document.querySelector('.cart-items');
           if (navCount) navCount.textContent = data.items_count;
+          if (Array.isArray(data.cart)) {
+            renderCartItems(data.cart);
+          }
         } catch (err) {
           console.error('Remove failed', err);
         } finally {

@@ -28,6 +28,24 @@ function toggleButtonLoading(btn, isLoading) {
 }
 
 window.toggleButtonLoading = toggleButtonLoading;
+function showToast(message, variant = 'info', duration = 3000) {
+    if (!message) return;
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = `toast ${variant}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add('out');
+        setTimeout(() => toast.remove(), 200);
+    }, duration);
+}
+window.showToast = showToast;
 function escapeHtml(str) {
     if (str === null || str === undefined) return "";
     return String(str)
@@ -165,10 +183,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (Array.isArray(data.cart)) {
                     renderCartItems(data.cart);
                 }
-                alert((data && data.message) || (product.title + " added to cart!"));
+                showToast((data && data.message) || (product.title + " added to cart!"), 'success');
             } catch (err) {
                 console.error(err);
-                alert("Unable to add item to cart right now.");
+                showToast("Unable to add item to cart right now.", 'error');
             } finally {
                 toggleButtonLoading(btn, false);
             }
@@ -222,7 +240,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 }
                 if (!data || data.ok === false || !res.ok) {
                     const errorMsg = (data && (data.error || data.message)) || "Unable to add to cart.";
-                    alert(errorMsg);
+                    showToast(errorMsg, 'error');
                     return;
                 }
                 const navCount = document.querySelector(".cart-items");
@@ -237,10 +255,10 @@ document.addEventListener("DOMContentLoaded", function () {
                 if (Array.isArray(data.cart)) {
                     renderCartItems(data.cart);
                 }
-                alert(data.message || `${itemName} added to cart!`);
+                showToast(data.message || `${itemName} added to cart!`, 'success');
             } catch (err) {
                 console.error("Add to cart failed", err);
-                alert("Something went wrong while adding to the cart.");
+                showToast("Something went wrong while adding to the cart.", 'error');
             } finally {
                 toggleButtonLoading(submitBtn, false);
             }

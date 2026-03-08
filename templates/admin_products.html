@@ -61,11 +61,16 @@
                     <p class="eyebrow">Product ID</p>
                     <h3>#{{ p.id }}</h3>
                   </div>
-                  <button type="button" class="icon-btn danger" onclick="confirmDelete({{ p.id }}, this)" aria-label="Delete product {{ p.id }}">
+                  <button type="button"
+                          class="icon-btn danger"
+                          data-product-id="{{ p.id }}"
+                          data-delete-url="{{ url_for('admin_delete_product', product_id=p.id) }}"
+                          onclick="confirmDelete(this)"
+                          aria-label="Delete product {{ p.id }}">
                     &times;
                   </button>
                 </header>
-                <form class="product-form" method="post" action="{{ url_for('admin_update_product') }}" enctype="multipart/form-data">
+                <form class="product-form" method="post" action="{{ url_for('admin_edit_product', product_id=p.id) }}" enctype="multipart/form-data">
                   <input type="hidden" name="id" value="{{ p.id }}">
                   {% if has_image %}
                     <div class="product-media">
@@ -104,7 +109,11 @@
                   {% endif %}
                   <div class="form-actions">
                     <button type="submit" class="btn primary">Save changes</button>
-                    <button type="button" class="btn text" onclick="confirmDelete({{ p.id }})">Delete</button>
+                    <button type="button"
+                            class="btn text"
+                            data-product-id="{{ p.id }}"
+                            data-delete-url="{{ url_for('admin_delete_product', product_id=p.id) }}"
+                            onclick="confirmDelete(this)">Delete</button>
                   </div>
                 </form>
               </article>
@@ -152,25 +161,36 @@
       }
     });
 
-    async function confirmDelete(id, btn){
+    async function confirmDelete(btn){
+      if(!btn) return;
+      const id = btn.dataset.productId;
+      const url = btn.dataset.deleteUrl;
+      if(!id || !url) return;
       if(!confirm('Delete product #' + id + '?')) return;
       const toggleLoader = window.toggleButtonLoading || function(){};
       toggleLoader(btn, true);
       try{
-        const res = await fetch('{{ url_for('admin_delete_product') }}', {
+        const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id })
+          headers: { 'Accept': 'application/json' }
         });
         const data = await res.json();
         if(data && data.ok){
           location.reload();
         }else{
-          alert('Unable to delete product right now.');
+          if (window.showToast) {
+            window.showToast('Unable to delete product right now.', 'error');
+          } else {
+            console.warn('Unable to delete product right now.');
+          }
         }
       }catch(err){
         console.error('delete failed', err);
-        alert('Unable to delete product right now.');
+        if (window.showToast) {
+          window.showToast('Unable to delete product right now.', 'error');
+        } else {
+          console.warn('Unable to delete product right now.');
+        }
       }finally{
         toggleLoader(btn, false);
       }

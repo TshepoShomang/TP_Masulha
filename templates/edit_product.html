@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Edit Product · Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin_style.css') }}">
+  </head>
+  <body class="admin-products-body">
+    {% include '_navbar.html' %}
+    <main class="admin-products-shell">
+      <section class="admin-form-card">
+        <h1>Edit Product #{{ product.id }}</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="admin-alerts">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <form method="POST" enctype="multipart/form-data" class="admin-form">
+          <label>
+            <span>Product name</span>
+            <input type="text" name="name" value="{{ product.name }}" required>
+          </label>
+          <label>
+            <span>Price (R)</span>
+            <input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(product.price if product.price is not none else 0) }}" required>
+          </label>
+          <div class="current-image">
+            <span>Current image</span>
+            <img src="{{ product_image_url(product.image) }}" alt="{{ product.name }}" style="max-width:220px;border-radius:12px;margin-top:8px;">
+          </div>
+          <label>
+            <span>Replace image (optional)</span>
+            <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp">
+            <small>Max size: {{ max_upload_mb }}MB</small>
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn primary">Save changes</button>
+            <button type="button"
+                    class="btn text"
+                    data-product-id="{{ product.id }}"
+                    data-delete-url="{{ url_for('admin_delete_product', product_id=product.id) }}"
+                    onclick="confirmDelete(this)">Delete</button>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script>
+      async function confirmDelete(btn){
+        if(!btn) return;
+        const url = btn.dataset.deleteUrl;
+        const id = btn.dataset.productId;
+        if(!url || !id) return;
+        if(!confirm('Delete product #' + id + '?')) return;
+        try{
+          const res = await fetch(url, { method: 'POST', headers: { 'Accept': 'application/json' } });
+          const data = await res.json();
+          if(data && data.ok){
+            window.location.href = "{{ url_for('products') }}";
+          }else{
+            if(window.showToast){
+              window.showToast(data?.message || 'Unable to delete product.', 'error');
+            }
+          }
+        }catch(err){
+          console.error('delete failed', err);
+          if(window.showToast){
+            window.showToast('Unable to delete product.', 'error');
+          }
+        }
+      }
+    </script>
+    {% include '_cart.html' %}
+  </body>
+</html>

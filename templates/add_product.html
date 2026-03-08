@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Add Product · Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin_style.css') }}">
+  </head>
+  <body class="admin-products-body">
+    {% include '_navbar.html' %}
+    <main class="admin-products-shell">
+      <section class="admin-form-card">
+        <h1>Add Product</h1>
+        <p>Upload a new product image. Max size: {{ max_upload_mb }}MB. Allowed types: JPG, JPEG, PNG, WEBP.</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="admin-alerts">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <form method="POST" enctype="multipart/form-data" class="admin-form">
+          <label>
+            <span>Product name</span>
+            <input type="text" name="name" placeholder="Premium Surface Cleaner" required>
+          </label>
+          <label>
+            <span>Price (R)</span>
+            <input type="number" name="price" step="0.01" min="0" placeholder="199.99" required>
+          </label>
+          <label>
+            <span>Image</span>
+            <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp" required>
+          </label>
+          <button type="submit" class="btn primary">Create product</button>
+        </form>
+      </section>
+    </main>
+    {% include '_cart.html' %}
+  </body>
+</html>

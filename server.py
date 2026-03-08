@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, send_from_directory
 from functools import wraps
 import psycopg2  # PostgreSQL driver
+from psycopg2 import sql
 
 # --- NOTE: moved registration of admin_mark_completed to EOF to ensure app exists ---
 import stripe
@@ -15,6 +16,9 @@ import io
 import time
 import smtplib
 import re
+import uuid
+import cloudinary
+import cloudinary.uploader
 try:
     from PIL import Image, ImageOps  # type: ignore
 except Exception:
@@ -33,6 +37,27 @@ app.config["UPLOAD_ROOT"] = UPLOAD_ROOT
 PRODUCT_UPLOAD_SUBDIR = os.getenv("PRODUCT_UPLOAD_SUBDIR", "products")
 app.config["PRODUCT_UPLOAD_SUBDIR"] = PRODUCT_UPLOAD_SUBDIR
 os.makedirs(os.path.join(app.config["UPLOAD_ROOT"], PRODUCT_UPLOAD_SUBDIR), exist_ok=True)
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "5"))
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+CLOUDINARY_FOLDER = os.getenv("CLOUDINARY_FOLDER", "products")
+_cloudinary_configured = False
+cloudinary_url = os.getenv("CLOUDINARY_URL")
+if cloudinary_url:
+    cloudinary.config(cloudinary_url=cloudinary_url, secure=True)
+    _cloudinary_configured = True
+else:
+    cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME")
+    api_key = os.getenv("CLOUDINARY_API_KEY")
+    api_secret = os.getenv("CLOUDINARY_API_SECRET")
+    if cloud_name and api_key and api_secret:
+        cloudinary.config(
+            cloud_name=cloud_name,
+            api_key=api_key,
+            api_secret=api_secret,
+            secure=True,
+        )
+        _cloudinary_configured = True
 
 def _should_expose_reset_link() -> bool:
     """Return True when we can surface the reset link in logs/UI (dev mode)."""
@@ -69,6 +94,210 @@ def build_media_url(path: str | None) -> str:
     if os.path.isfile(upload_candidate):
         return url_for("serve_upload", filename=cleaned)
     return url_for("static", filename=cleaned)
+
+
+def allowed_image_file(filename: str) -> bool:
+    if not filename:
+        return False
+    return os.path.splitext(filename)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+
+
+def ensure_cloudinary_ready():
+    if not _cloudinary_configured:
+        raise RuntimeError("Cloudinary is not configured. Please set CLOUDINARY_URL or CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET.")
+
+
+def upload_product_image(file_storage):
+    ensure_cloudinary_ready()
+    filename = secure_filename(file_storage.filename or "")
+    if not allowed_image_file(filename):
+        raise ValueError("Unsupported image format. Allowed: jpg, jpeg, png, webp.")
+    unique_id = uuid.uuid4().hex
+    options = {
+        "resource_type": "image",
+        "overwrite": True,
+    }
+    folder = (CLOUDINARY_FOLDER or "").strip().strip("/")
+    if folder:
+        options["folder"] = folder
+        options["public_id"] = unique_id
+    else:
+        options["public_id"] = unique_id
+    file_storage.stream.seek(0)
+    result = cloudinary.uploader.upload(file_storage, **options)
+    secure_url = result.get("secure_url")
+    public_id = result.get("public_id")
+    if not secure_url or not public_id:
+        raise RuntimeError("Cloudinary upload failed to return secure URL.")
+    return secure_url, public_id
+
+
+def delete_product_image(public_id: str | None):
+    if not public_id:
+        return
+    try:
+        ensure_cloudinary_ready()
+    except RuntimeError:
+        return
+    try:
+        cloudinary.uploader.destroy(public_id, invalidate=True)
+    except Exception as exc:
+        app.logger.warning("Failed to delete Cloudinary asset %s: %s", public_id, exc)
+
+
+def extract_public_id_from_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        if "/upload/" not in url:
+            return None
+        remainder = url.split("/upload/", 1)[1]
+        remainder = remainder.split("?", 1)[0].split("#", 1)[0]
+        remainder = remainder.rsplit(".", 1)[0]
+        return remainder
+    except Exception:
+        return None
+
+
+def resolve_product_columns(conn):
+    cols_raw = table_columns(conn, "Products")
+    cols_lookup = {c.lower(): c for c in cols_raw}
+
+    def pick(candidates):
+        for cand in candidates:
+            key = cand.lower()
+            if key in cols_lookup:
+                return cols_lookup[key]
+        return None
+
+    return {
+        "id": table_id_column(conn, "Products", ("id", "product_id", "ProductID", "productid")),
+        "name": pick(("name", "product_name", "title")),
+        "price": pick(("price", "amount", "cost")),
+        "image": pick(("image", "image_url", "photo", "picture", "imagepath")),
+        "image_public_id": pick(("image_public_id", "cloudinary_id", "public_id", "imagepublicid")),
+    }
+
+
+def fetch_product_by_id(product_id: int):
+    conn = get_db_connection()
+    try:
+        columns = resolve_product_columns(conn)
+        select_parts = [f"{columns['id']} AS id"]
+        aliases = ["id"]
+        for alias, column in (
+            ("name", columns["name"]),
+            ("price", columns["price"]),
+            ("image", columns["image"]),
+            ("image_public_id", columns["image_public_id"]),
+        ):
+            if column:
+                select_parts.append(f"{column} AS {alias}")
+                aliases.append(alias)
+        cur = conn.cursor()
+        cur.execute(f"SELECT {', '.join(select_parts)} FROM Products WHERE {columns['id']} = %s", (product_id,))
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            return None
+        data = {}
+        for idx, alias in enumerate(aliases):
+            data[alias] = row[idx]
+        if data.get("id") is not None:
+            try:
+                data["id"] = int(data["id"])
+            except Exception:
+                pass
+        if data.get("price") is not None:
+            try:
+                data["price"] = float(data["price"])
+            except Exception:
+                pass
+        return data
+    finally:
+        conn.close()
+
+
+def get_cart_summary():
+    cart = session.get("cart", [])
+    items_count = 0
+    total = 0.0
+    for item in cart:
+        try:
+            qty = int(item.get("quantity", 1))
+        except Exception:
+            qty = 1
+        items_count += qty
+        try:
+            total += float(item.get("price", 0)) * qty
+        except Exception:
+            continue
+    return cart, items_count, round(total, 2)
+
+
+def resolve_table_columns_generic(conn, table_candidates):
+    for name in table_candidates:
+        try:
+            cols = table_columns(conn, name)
+            if cols:
+                lookup = {c.lower(): c for c in cols}
+                return lookup, name
+        except Exception:
+            continue
+    return None, None
+
+
+def delete_order_items_for_product(conn, product_id):
+    lookup, table_name = resolve_table_columns_generic(conn, ['OrderItems', 'order_items', 'orderitems'])
+    if not lookup:
+        return
+    prod_col = None
+    for cand in ('product_id', 'productid', 'product'):
+        if cand in lookup:
+            prod_col = lookup[cand]
+            break
+    if not prod_col:
+        for key, actual in lookup.items():
+            if 'product' in key and key.endswith('id'):
+                prod_col = actual
+                break
+    if not prod_col:
+        return
+    cur = conn.cursor()
+    try:
+        stmt = sql.SQL("DELETE FROM {table} WHERE {col} = %s").format(
+            table=sql.Identifier(table_name),
+            col=sql.Identifier(prod_col)
+        )
+        cur.execute(stmt, (product_id,))
+    finally:
+        cur.close()
+
+
+def remove_product_record(product_id: int):
+    product = fetch_product_by_id(product_id)
+    if not product:
+        return False, "Product not found.", None
+    conn = get_db_connection()
+    try:
+        columns = resolve_product_columns(conn)
+        delete_order_items_for_product(conn, product_id)
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM Products WHERE {columns['id']} = %s", (product_id,))
+        if cur.rowcount == 0:
+            conn.rollback()
+            return False, "Product not found.", None
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to delete product %s: %s", product_id, exc)
+        return False, "Unable to delete product.", None
+    finally:
+        conn.close()
+    public_id = product.get("image_public_id") or extract_public_id_from_url(product.get("image"))
+    delete_product_image(public_id)
+    return True, "Product deleted.", product
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -792,6 +1021,316 @@ def products():
         return render_template("products.html", products=items, cart=cart, itemsInCart=itemsInCart, cartTotal=cartTotal)
         
     return render_template("products.html", products=items, cart=cart, itemsInCart=itemsInCart, cartTotal=cartTotal, Login="Login", Signup="Signup")
+
+
+@app.route("/admin/add-product", methods=["GET", "POST"])
+@admin_required
+def admin_add_product():
+    cart, itemsInCart, cartTotal = get_cart_summary()
+    if request.method == "GET":
+        return render_template(
+            "add_product.html",
+            cart=cart,
+            itemsInCart=itemsInCart,
+            cartTotal=cartTotal,
+            max_upload_mb=MAX_UPLOAD_MB,
+        )
+
+    name = (request.form.get("name") or "").strip()
+    price_raw = (request.form.get("price") or "").strip()
+    file = request.files.get("image")
+
+    if not name:
+        flash("Product name is required.", "error")
+        return redirect(url_for("admin_add_product"))
+    try:
+        price = float(price_raw)
+    except Exception:
+        flash("Please provide a valid price.", "error")
+        return redirect(url_for("admin_add_product"))
+    if price < 0:
+        flash("Price cannot be negative.", "error")
+        return redirect(url_for("admin_add_product"))
+    if not file or not getattr(file, "filename", ""):
+        flash("Please upload an image.", "error")
+        return redirect(url_for("admin_add_product"))
+    if request.content_length and request.content_length > app.config["MAX_CONTENT_LENGTH"]:
+        flash(f"Image must be smaller than {MAX_UPLOAD_MB}MB.", "error")
+        return redirect(url_for("admin_add_product"))
+
+    try:
+        image_url, public_id = upload_product_image(file)
+    except Exception as exc:
+        app.logger.error("Image upload failed: %s", exc)
+        flash("Failed to upload product image. Please try again.", "error")
+        return redirect(url_for("admin_add_product"))
+
+    conn = get_db_connection()
+    try:
+        columns = resolve_product_columns(conn)
+        if not columns["name"] or not columns["price"] or not columns["image"]:
+            raise RuntimeError("Products table is missing required columns.")
+        insert_cols = [columns["name"], columns["price"], columns["image"]]
+        values = [name, price, image_url]
+        if columns["image_public_id"]:
+            insert_cols.append(columns["image_public_id"])
+            values.append(public_id)
+        placeholders = ", ".join(["%s"] * len(insert_cols))
+        sql = f"INSERT INTO Products ({', '.join(insert_cols)}) VALUES ({placeholders})"
+        cur = conn.cursor()
+        cur.execute(sql, tuple(values))
+        conn.commit()
+        cur.close()
+        flash("Product created successfully.", "success")
+        return redirect(url_for("products"))
+    except Exception as exc:
+        conn.rollback()
+        delete_product_image(public_id)
+        app.logger.exception("Failed to save product: %s", exc)
+        flash("Unable to save product. Please try again.", "error")
+        return redirect(url_for("admin_add_product"))
+    finally:
+        conn.close()
+
+
+@app.route("/admin/edit-product/<int:product_id>", methods=["GET", "POST"])
+@admin_required
+def admin_edit_product(product_id):
+    cart, itemsInCart, cartTotal = get_cart_summary()
+    product = fetch_product_by_id(product_id)
+    if not product:
+        flash("Product not found.", "error")
+        return redirect(url_for("products"))
+
+    if request.method == "GET":
+        return render_template(
+            "edit_product.html",
+            product=product,
+            cart=cart,
+            itemsInCart=itemsInCart,
+            cartTotal=cartTotal,
+            max_upload_mb=MAX_UPLOAD_MB,
+        )
+
+    name = (request.form.get("name") or "").strip()
+    price_raw = (request.form.get("price") or "").strip()
+    file = request.files.get("image")
+
+    if not name:
+        flash("Product name is required.", "error")
+        return redirect(url_for("admin_edit_product", product_id=product_id))
+    try:
+        price = float(price_raw)
+    except Exception:
+        flash("Please provide a valid price.", "error")
+        return redirect(url_for("admin_edit_product", product_id=product_id))
+    if price < 0:
+        flash("Price cannot be negative.", "error")
+        return redirect(url_for("admin_edit_product", product_id=product_id))
+
+    new_image_url = None
+    new_public_id = None
+    if file and getattr(file, "filename", ""):
+        if request.content_length and request.content_length > app.config["MAX_CONTENT_LENGTH"]:
+            flash(f"Image must be smaller than {MAX_UPLOAD_MB}MB.", "error")
+            return redirect(url_for("admin_edit_product", product_id=product_id))
+        try:
+            new_image_url, new_public_id = upload_product_image(file)
+        except Exception as exc:
+            app.logger.error("Image upload failed: %s", exc)
+            flash("Unable to upload new image.", "error")
+            return redirect(url_for("admin_edit_product", product_id=product_id))
+
+    conn = get_db_connection()
+    try:
+        columns = resolve_product_columns(conn)
+        updates = []
+        params = []
+        if columns["name"]:
+            updates.append(f"{columns['name']} = %s")
+            params.append(name)
+        if columns["price"]:
+            updates.append(f"{columns['price']} = %s")
+            params.append(price)
+        if new_image_url and columns["image"]:
+            updates.append(f"{columns['image']} = %s")
+            params.append(new_image_url)
+            if columns["image_public_id"] and new_public_id:
+                updates.append(f"{columns['image_public_id']} = %s")
+                params.append(new_public_id)
+        if not updates:
+            flash("Nothing to update.", "info")
+            return redirect(url_for("admin_edit_product", product_id=product_id))
+        params.append(product_id)
+        cur = conn.cursor()
+        cur.execute(f"UPDATE Products SET {', '.join(updates)} WHERE {columns['id']} = %s", tuple(params))
+        conn.commit()
+        cur.close()
+        if new_image_url:
+            old_public_id = product.get("image_public_id") or extract_public_id_from_url(product.get("image"))
+            delete_product_image(old_public_id)
+        flash("Product updated.", "success")
+        return redirect(url_for("products"))
+    except Exception as exc:
+        conn.rollback()
+        if new_public_id:
+            delete_product_image(new_public_id)
+        app.logger.exception("Failed to update product %s: %s", product_id, exc)
+        flash("Unable to update product.", "error")
+        return redirect(url_for("admin_edit_product", product_id=product_id))
+    finally:
+        conn.close()
+
+
+@app.post("/admin/delete-product/<int:product_id>")
+@admin_required
+def admin_delete_product(product_id):
+    success, message, _ = remove_product_record(product_id)
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify({"ok": success, "message": message})
+    flash(message, "success" if success else "error")
+    return redirect(url_for("products"))
+
+
+@app.post("/admin/delete-all-products")
+@admin_required
+def admin_delete_all_products():
+    conn = get_db_connection()
+    deleted = []
+    try:
+        columns = resolve_product_columns(conn)
+        select_cols = [f"{columns['id']} AS id"]
+        aliases = ["id"]
+        for alias, column in (
+            ("image", columns["image"]),
+            ("image_public_id", columns["image_public_id"]),
+        ):
+            if column:
+                select_cols.append(f"{column} AS {alias}")
+                aliases.append(alias)
+        cur = conn.cursor()
+        if len(select_cols) > 1:
+            cur.execute(f"SELECT {', '.join(select_cols)} FROM Products")
+            for row in cur.fetchall():
+                record = {}
+                for idx, alias in enumerate(aliases):
+                    record[alias] = row[idx]
+                deleted.append(record)
+        cur.execute("DELETE FROM Products")
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to delete all products: %s", exc)
+        if request.accept_mimetypes.best == "application/json":
+            return jsonify({"ok": False, "message": "Unable to delete products."}), 500
+        flash("Unable to delete products.", "error")
+        return redirect(url_for("products"))
+    finally:
+        conn.close()
+    for record in deleted:
+        public_id = record.get("image_public_id") or extract_public_id_from_url(record.get("image"))
+        delete_product_image(public_id)
+    message = f"Deleted {len(deleted)} products."
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify({"ok": True, "message": message})
+    flash(message, "success")
+    return redirect(url_for("products"))
+
+
+def delete_all_orders():
+    conn = get_db_connection()
+    try:
+        lookup, table_name = resolve_table_columns_generic(conn, ['OrderItems', 'order_items', 'orderitems'])
+        if lookup:
+            cur = conn.cursor()
+            cur.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(table_name)))
+            cur.close()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM Orders")
+        affected = cur.rowcount
+        conn.commit()
+        cur.close()
+        return affected
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to delete orders: %s", exc)
+        raise
+    finally:
+        conn.close()
+
+
+@app.post("/admin/delete-all-orders")
+@admin_required
+def admin_delete_all_orders():
+    wants_json = request.accept_mimetypes.best == "application/json"
+    try:
+        count = delete_all_orders()
+        message = f"Deleted {count} orders."
+        if wants_json:
+            return jsonify({"ok": True, "message": message})
+        flash(message, "success")
+    except Exception:
+        message = "Unable to delete orders."
+        if wants_json:
+            return jsonify({"ok": False, "message": message}), 500
+        flash(message, "error")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.post("/admin/orders/delete/<int:order_id>")
+@admin_required
+def admin_delete_single_order(order_id):
+    wants_json = request.accept_mimetypes.best == "application/json"
+    try:
+        delete_all_orders_for_ids([order_id])
+        message = f"Order #{order_id} deleted."
+        if wants_json:
+            return jsonify({"ok": True, "message": message})
+        flash(message, "success")
+    except Exception:
+        message = "Unable to delete that order."
+        if wants_json:
+            return jsonify({"ok": False, "message": message}), 500
+        flash(message, "error")
+    return redirect(url_for("admin_dashboard"))
+
+
+def delete_all_orders_for_ids(order_ids):
+    if not order_ids:
+        return
+    conn = get_db_connection()
+    try:
+        lookup, table_name = resolve_table_columns_generic(conn, ['OrderItems', 'order_items', 'orderitems'])
+        if lookup:
+            cur = conn.cursor()
+            order_fk = None
+            for cand in ('order_id', 'orderid', 'order'):
+                if cand in lookup:
+                    order_fk = lookup[cand]
+                    break
+            if not order_fk:
+                for key, actual in lookup.items():
+                    if 'order' in key and key.endswith('id'):
+                        order_fk = actual
+                        break
+            if order_fk:
+                stmt = sql.SQL("DELETE FROM {table} WHERE {col} = ANY(%s)").format(
+                    table=sql.Identifier(table_name),
+                    col=sql.Identifier(order_fk),
+                )
+                cur.execute(stmt, (order_ids,))
+                cur.close()
+        cur = conn.cursor()
+        cur.execute(sql.SQL("DELETE FROM Orders WHERE id = ANY(%s)"), (order_ids,))
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to delete orders %s: %s", order_ids, exc)
+        raise
+    finally:
+        conn.close()
 
 @app.route("/add-to-cart", methods=["POST"])
 def add_to_cart():
@@ -2232,18 +2771,26 @@ def admin_setup():
 @app.post("/admin/users/promote")
 @admin_required
 def admin_promote_user():
-    email = (request.form.get("email") or "").strip().lower()
-    if not email:
-        flash("Please choose a user to promote.", "error")
+    wants_json = request.is_json or request.accept_mimetypes.best == "application/json"
+    payload = request.get_json(silent=True) if request.is_json else None
+    email = (payload or {}).get("email") if payload else request.form.get("email")
+    email = (email or "").strip().lower()
+
+    def finish(ok: bool, message: str, status: int = 200):
+        if wants_json:
+            return jsonify({"ok": ok, "message": message}), status
+        flash(message, "success" if ok else "error")
         return redirect(url_for("admin_dashboard"))
+
+    if not email:
+        return finish(False, "Please choose a user to promote.", 400)
 
     conn = get_db_connection()
     try:
         cols = {c.lower() for c in table_columns(conn, "Users")}
         if "is_admin" not in cols:
-            flash("Users table is missing the is_admin column.", "error")
             conn.close()
-            return redirect(url_for("admin_dashboard"))
+            return finish(False, "Users table is missing the is_admin column.", 500)
         cur = conn.cursor()
         cur.execute(
             """
@@ -2254,24 +2801,26 @@ def admin_promote_user():
             (email,),
         )
         if cur.rowcount == 0:
-            flash("User not found or already an admin.", "error")
+            message = "User not found or already an admin."
+            result = finish(False, message, 404)
         else:
             conn.commit()
-            flash(f"{email} now has admin access.", "success")
+            message = f"{email} now has admin access."
+            result = finish(True, message)
         cur.close()
     except Exception as e:
         try:
             conn.rollback()
         except Exception:
             pass
-        flash("Failed to update admin rights.", "error")
-        print("admin_promote_user error:", e)
+        app.logger.exception("admin_promote_user error: %s", e)
+        result = finish(False, "Failed to update admin rights.", 500)
     finally:
         try:
             conn.close()
         except Exception:
             pass
-    return redirect(url_for("admin_dashboard"))
+    return result
 
 
 @app.route("/admin/orders/mark-viewed", methods=["POST"])
@@ -2549,243 +3098,6 @@ def admin_products_list():
             pass
         print('admin_products_list error:', e)
         return jsonify(ok=False, error='server_error'), 500
-
-
-@app.post('/admin/products/update')
-@admin_required
-def admin_update_product():
-    # Accept multipart or JSON
-    data = request.form if request.form else (request.get_json(silent=True) or {})
-    try:
-        pid = int(data.get('id'))
-    except Exception:
-        return jsonify(ok=False, error='invalid_id'), 400
-
-    conn = get_db_connection()
-    try:
-        cols = {c.lower() for c in table_columns(conn, 'Products')}
-        id_col = table_id_column(conn, 'Products', ("id", "product_id", "ProductID", "productid"))
-        sets = []
-        params = []
-
-        # Name
-        if 'name' in cols and 'name' in data:
-            sets.append('name = %s'); params.append((data.get('name') or '').strip())
-        # Price
-        if 'price' in cols and 'price' in data:
-            try:
-                price = float(data.get('price'))
-                sets.append('price = %s'); params.append(price)
-            except Exception:
-                pass
-        # Description
-        desc_col = next((c for c in ('description','desc','details') if c in cols), None)
-        if desc_col and ('description' in data):
-            sets.append(f"{desc_col} = %s"); params.append((data.get('description') or '').strip())
-        # Quantity
-        qty_col = next((c for c in ('quantity','qty','stock','in_stock') if c in cols), None)
-        if qty_col and ('quantity' in data):
-            try:
-                qty = int(data.get('quantity'))
-                sets.append(f"{qty_col} = %s"); params.append(qty)
-            except Exception:
-                pass
-
-        # Image upload
-        file = request.files.get('image') if request.files else None
-        if 'image' in cols and file and getattr(file, 'filename', ''):
-            # Save resized image similar to add product
-            try:
-                # Determine target size from product-1.* if exists
-                target_size = None
-                if Image is not None:
-                    for cand_name in ('product-1.jpeg','product-1.jpg','product-1.png'):
-                        ref_path = os.path.join(app.static_folder, 'images', cand_name)
-                        if os.path.exists(ref_path):
-                            try:
-                                with Image.open(ref_path) as ref_img:
-                                    target_size = ref_img.size
-                                    break
-                            except Exception:
-                                continue
-                dest_dir = os.path.join(app.config["UPLOAD_ROOT"], app.config["PRODUCT_UPLOAD_SUBDIR"])
-                os.makedirs(dest_dir, exist_ok=True)
-                original = secure_filename(file.filename)
-                base, ext = os.path.splitext(original)
-                ext = (ext or '').lower()
-                if ext not in ('.jpg','.jpeg','.png','.webp'):
-                    ext = '.jpg'
-                filename = f"product-{int(time.time())}{ext}"
-                dest_path = os.path.join(dest_dir, filename)
-                image_rel_path = f"{app.config['PRODUCT_UPLOAD_SUBDIR']}/{filename}"
-                if Image is not None:
-                    img = Image.open(file.stream)
-                    try: img = img.convert('RGB')
-                    except Exception: pass
-                    if target_size and ImageOps is not None:
-                        img = ImageOps.fit(img, target_size, method=Image.BICUBIC)
-                    elif target_size:
-                        img = img.resize(target_size)
-                    save_kwargs = {}
-                    if ext in ('.jpg','.jpeg'):
-                        save_kwargs.update({"quality":85, "optimize":True})
-                    img.save(dest_path, **save_kwargs)
-                else:
-                    file.save(dest_path)
-                sets.append('image = %s'); params.append(image_rel_path)
-            except Exception as e:
-                print('image update error:', e)
-
-        if not sets:
-            conn.close()
-            return jsonify(ok=True)
-
-        params.append(pid)
-        sql = f"UPDATE Products SET {', '.join(sets)} WHERE {id_col} = %s"
-        cur = conn.cursor(); cur.execute(sql, tuple(params)); conn.commit(); cur.close(); conn.close()
-        return jsonify(ok=True)
-    except Exception as e:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        print('admin_update_product error:', e)
-        return jsonify(ok=False, error='server_error'), 500
-
-
-@app.post('/admin/products/delete')
-@admin_required
-def admin_delete_product():
-    data = request.get_json(silent=True) or request.form or {}
-    try:
-        pid = int(data.get('id'))
-    except Exception:
-        return jsonify(ok=False, error='invalid_id'), 400
-    conn = get_db_connection()
-    try:
-        id_col = table_id_column(conn, 'Products', ("id", "product_id", "ProductID", "productid"))
-        cur = conn.cursor(); cur.execute(f"DELETE FROM Products WHERE {id_col} = %s", (pid,)); conn.commit(); cur.close(); conn.close()
-        return jsonify(ok=True)
-    except Exception as e:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        print('admin_delete_product error:', e)
-        return jsonify(ok=False, error='server_error'), 500
-
-
-@app.route("/admin/products/add", methods=["POST"])
-@admin_required
-def admin_add_product():
-    name = (request.form.get("name") or "").strip()
-    price_raw = request.form.get("price")
-    file = request.files.get("image")
-    if not name:
-        flash("Product name required.", "error")
-        return redirect(url_for("admin_dashboard"))
-    try:
-        price = float(price_raw)
-    except Exception:
-        flash("Invalid price.", "error")
-        return redirect(url_for("admin_dashboard"))
-    if not file or not getattr(file, 'filename', ''):
-        flash("Please upload a product image.", "error")
-        return redirect(url_for("admin_dashboard"))
-
-    # Determine reference dimensions from product-1.jpeg if available
-    target_size = None  # (width, height)
-    ref_candidates = [
-        os.path.join(app.static_folder, 'images', 'product-1.jpeg'),
-        os.path.join(app.static_folder, 'images', 'product-1.jpg'),
-        os.path.join(app.static_folder, 'images', 'product-1.png'),
-    ]
-    if Image is not None:
-        for ref_path in ref_candidates:
-            if os.path.exists(ref_path):
-                try:
-                    with Image.open(ref_path) as ref_img:
-                        target_size = ref_img.size  # (w, h)
-                    break
-                except Exception:
-                    continue
-
-    # Ensure destination directory exists
-    dest_dir = os.path.join(app.config["UPLOAD_ROOT"], app.config["PRODUCT_UPLOAD_SUBDIR"])
-    try:
-        os.makedirs(dest_dir, exist_ok=True)
-    except Exception:
-        pass
-
-    # Build a safe filename
-    original = secure_filename(file.filename)
-    base, ext = os.path.splitext(original)
-    ext = (ext or '').lower()
-    if ext not in ('.jpg', '.jpeg', '.png', '.webp'):
-        ext = '.jpg'
-    ts = int(time.time())
-    filename = f"product-{ts}{ext}"
-    dest_path = os.path.join(dest_dir, filename)
-
-    # Process and save image (resize to target_size if possible)
-    image_rel_path = f"{app.config['PRODUCT_UPLOAD_SUBDIR']}/{filename}"
-    try:
-        if Image is not None:
-            img = Image.open(file.stream)
-            # Convert to RGB for JPEG/Web use consistency
-            try:
-                img = img.convert('RGB')
-            except Exception:
-                pass
-            if target_size and ImageOps is not None:
-                # Fit to exact target size (crop as needed to match aspect)
-                img = ImageOps.fit(img, target_size, method=Image.BICUBIC)
-            elif target_size:
-                img = img.resize(target_size)
-            # Save
-            save_kwargs = {}
-            if ext in ('.jpg', '.jpeg'):
-                save_kwargs.update({"quality": 85, "optimize": True})
-            img.save(dest_path, **save_kwargs)
-        else:
-            # PIL not available: save raw file bytes
-            file.save(dest_path)
-    except Exception as e:
-        print('image save error:', e)
-        try:
-            # Fallback to saving raw
-            file.save(dest_path)
-        except Exception as e2:
-            print('image raw save error:', e2)
-            flash("Failed to save image.", "error")
-            return redirect(url_for("admin_dashboard"))
-
-    # Insert product record
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        # Prefer columns (name, price, image) if present
-        cols = table_columns(conn, 'Products')
-        if {'name','price','image'}.issubset({c.lower() for c in cols}):
-            cur.execute("INSERT INTO Products (name, price, image) VALUES (%s, %s, %s)", (name, price, image_rel_path))
-        elif {'name','price'}.issubset({c.lower() for c in cols}):
-            cur.execute("INSERT INTO Products (name, price) VALUES (%s, %s)", (name, price))
-        else:
-            # Minimal fallback: attempt (name, price, image)
-            cur.execute("INSERT INTO Products (name, price, image) VALUES (%s, %s, %s)", (name, price, image_rel_path))
-        conn.commit()
-        flash("Product added.", "success")
-    except Exception as e:
-        print("Add product error:", e)
-        flash("Failed to add product.", "error")
-    finally:
-        try:
-            cur.close()
-            conn.close()
-        except Exception:
-            pass
-
-    return redirect(url_for("admin_dashboard"))
 
 
 @app.route('/admin/products/manage')

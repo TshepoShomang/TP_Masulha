@@ -884,6 +884,62 @@ button.is-loading,
   pointer-events: none;
 }
 
+.toast-container {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 1100;
+}
+
+.toast {
+  min-width: 220px;
+  max-width: min(340px, 80vw);
+  background: rgba(15, 23, 42, 0.9);
+  color: #f1f5f9;
+  padding: 12px 16px;
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(2, 6, 23, 0.4);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.95rem;
+  opacity: 0;
+  transform: translateY(-10px);
+  animation: toast-in 0.25s ease forwards;
+}
+
+.toast.success {
+  background: rgba(16, 185, 129, 0.95);
+  color: #052e16;
+}
+
+.toast.error {
+  background: rgba(248, 113, 113, 0.95);
+  color: #450a0a;
+}
+
+.toast.info {
+  background: rgba(59, 130, 246, 0.95);
+  color: #0f172a;
+}
+
+.toast.out {
+  animation: toast-out 0.2s ease forwards;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-10px); }
+}
+
 /*-------------------End of Guest Checkout---------------------*/
 
 /*----------------------Shipping------------------------------------*/
