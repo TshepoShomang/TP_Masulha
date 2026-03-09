@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from functools import wraps
 import psycopg2  # PostgreSQL driver
 from psycopg2 import sql
+from typing import Optional
 
 # --- NOTE: moved registration of admin_mark_completed to EOF to ensure app exists ---
 import stripe
@@ -19,6 +20,37 @@ import re
 import uuid
 import cloudinary
 import cloudinary.uploader
+
+from app_modules.media_utils import (
+    should_expose_reset_link,
+    is_valid_email,
+    build_media_url,
+    upload_product_image,
+    delete_product_image,
+    extract_public_id_from_url,
+)
+from app_modules.db_utils import (
+    get_db_connection,
+    table_columns,
+    table_id_column,
+    resolve_product_columns,
+    fetch_product_by_id,
+    resolve_table_columns_generic,
+    ensure_guest_table,
+    get_or_create_guest,
+    fetch_user_id,
+    ensure_order_items_table,
+    ensure_orders_schema,
+    delete_order_items_for_product,
+    remove_product_record,
+    ORDER_ITEM_TABLE_CANDIDATES,
+)
+from app_modules.order_utils import (
+    get_cart_summary,
+    orders_viewed_column,
+    record_completed_order,
+    ensure_orders_phone_column,
+)
 try:
     from PIL import Image, ImageOps  # type: ignore
 except Exception:
@@ -59,254 +91,12 @@ else:
         )
         _cloudinary_configured = True
 
-def _should_expose_reset_link() -> bool:
-    """Return True when we can surface the reset link in logs/UI (dev mode)."""
-    explicit = os.getenv("RESET_SHOW_DEV_LINK")
-    if explicit is not None:
-        return explicit.strip().lower() in {"1", "true", "yes", "on"}
-    return app.debug
-
-
-EMAIL_PATTERN = re.compile(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", re.IGNORECASE)
-
-
-def is_valid_email(address: str) -> bool:
-    """Return True when the supplied email address looks valid."""
-    if not address:
-        return False
-    return EMAIL_PATTERN.match(address.strip()) is not None
-
-
-def build_media_url(path: str | None) -> str:
-    """Return a public URL for either static or uploaded product assets."""
-    if not path:
-        return url_for("static", filename="images/product-1.jpeg")
-    path_str = str(path).strip()
-    if not path_str:
-        return url_for("static", filename="images/product-1.jpeg")
-    if path_str.startswith("http://") or path_str.startswith("https://"):
-        return path_str
-    cleaned = path_str.lstrip("/")
-    static_candidate = os.path.join(app.static_folder, cleaned)
-    if os.path.isfile(static_candidate):
-        return url_for("static", filename=cleaned)
-    upload_candidate = os.path.join(app.config["UPLOAD_ROOT"], cleaned)
-    if os.path.isfile(upload_candidate):
-        return url_for("serve_upload", filename=cleaned)
-    return url_for("static", filename=cleaned)
-
-
-def allowed_image_file(filename: str) -> bool:
-    if not filename:
-        return False
-    return os.path.splitext(filename)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
-
-
-def ensure_cloudinary_ready():
-    if not _cloudinary_configured:
-        raise RuntimeError("Cloudinary is not configured. Please set CLOUDINARY_URL or CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET.")
-
-
-def upload_product_image(file_storage):
-    ensure_cloudinary_ready()
-    filename = secure_filename(file_storage.filename or "")
-    if not allowed_image_file(filename):
-        raise ValueError("Unsupported image format. Allowed: jpg, jpeg, png, webp.")
-    unique_id = uuid.uuid4().hex
-    options = {
-        "resource_type": "image",
-        "overwrite": True,
-    }
-    folder = (CLOUDINARY_FOLDER or "").strip().strip("/")
-    if folder:
-        options["folder"] = folder
-        options["public_id"] = unique_id
-    else:
-        options["public_id"] = unique_id
-    file_storage.stream.seek(0)
-    result = cloudinary.uploader.upload(file_storage, **options)
-    secure_url = result.get("secure_url")
-    public_id = result.get("public_id")
-    if not secure_url or not public_id:
-        raise RuntimeError("Cloudinary upload failed to return secure URL.")
-    return secure_url, public_id
-
-
-def delete_product_image(public_id: str | None):
-    if not public_id:
-        return
-    try:
-        ensure_cloudinary_ready()
-    except RuntimeError:
-        return
-    try:
-        cloudinary.uploader.destroy(public_id, invalidate=True)
-    except Exception as exc:
-        app.logger.warning("Failed to delete Cloudinary asset %s: %s", public_id, exc)
-
-
-def extract_public_id_from_url(url: str | None) -> str | None:
-    if not url:
-        return None
-    try:
-        if "/upload/" not in url:
-            return None
-        remainder = url.split("/upload/", 1)[1]
-        remainder = remainder.split("?", 1)[0].split("#", 1)[0]
-        remainder = remainder.rsplit(".", 1)[0]
-        return remainder
-    except Exception:
-        return None
-
-
-def resolve_product_columns(conn):
-    cols_raw = table_columns(conn, "Products")
-    cols_lookup = {c.lower(): c for c in cols_raw}
-
-    def pick(candidates):
-        for cand in candidates:
-            key = cand.lower()
-            if key in cols_lookup:
-                return cols_lookup[key]
-        return None
-
-    return {
-        "id": table_id_column(conn, "Products", ("id", "product_id", "ProductID", "productid")),
-        "name": pick(("name", "product_name", "title")),
-        "price": pick(("price", "amount", "cost")),
-        "image": pick(("image", "image_url", "photo", "picture", "imagepath")),
-        "image_public_id": pick(("image_public_id", "cloudinary_id", "public_id", "imagepublicid")),
-        "quantity": pick(("quantity", "qty", "stock", "in_stock")),
-    }
-
-
-def fetch_product_by_id(product_id: int):
-    conn = get_db_connection()
-    try:
-        columns = resolve_product_columns(conn)
-        select_parts = [f"{columns['id']} AS id"]
-        aliases = ["id"]
-        for alias, column in (
-            ("name", columns["name"]),
-            ("price", columns["price"]),
-            ("image", columns["image"]),
-            ("image_public_id", columns["image_public_id"]),
-            ("quantity", columns["quantity"]),
-        ):
-            if column:
-                select_parts.append(f"{column} AS {alias}")
-                aliases.append(alias)
-        cur = conn.cursor()
-        cur.execute(f"SELECT {', '.join(select_parts)} FROM Products WHERE {columns['id']} = %s", (product_id,))
-        row = cur.fetchone()
-        cur.close()
-        if not row:
-            return None
-        data = {}
-        for idx, alias in enumerate(aliases):
-            data[alias] = row[idx]
-        if data.get("id") is not None:
-            try:
-                data["id"] = int(data["id"])
-            except Exception:
-                pass
-        if data.get("price") is not None:
-            try:
-                data["price"] = float(data["price"])
-            except Exception:
-                pass
-        if data.get("quantity") is not None:
-            try:
-                data["quantity"] = int(data["quantity"])
-            except Exception:
-                pass
-        return data
-    finally:
-        conn.close()
-
-
-def get_cart_summary():
-    cart = session.get("cart", [])
-    items_count = 0
-    total = 0.0
-    for item in cart:
-        try:
-            qty = int(item.get("quantity", 1))
-        except Exception:
-            qty = 1
-        items_count += qty
-        try:
-            total += float(item.get("price", 0)) * qty
-        except Exception:
-            continue
-    return cart, items_count, round(total, 2)
-
-
-def resolve_table_columns_generic(conn, table_candidates):
-    for name in table_candidates:
-        try:
-            cols = table_columns(conn, name)
-            if cols:
-                lookup = {c.lower(): c for c in cols}
-                return lookup, name
-        except Exception:
-            continue
-    return None, None
-
-
-def delete_order_items_for_product(conn, product_id):
-    lookup, table_name = resolve_table_columns_generic(conn, ['OrderItems', 'order_items', 'orderitems'])
-    if not lookup:
-        return
-    prod_col = None
-    for cand in ('product_id', 'productid', 'product'):
-        if cand in lookup:
-            prod_col = lookup[cand]
-            break
-    if not prod_col:
-        for key, actual in lookup.items():
-            if 'product' in key and key.endswith('id'):
-                prod_col = actual
-                break
-    if not prod_col:
-        return
-    cur = conn.cursor()
-    try:
-        stmt = sql.SQL("DELETE FROM {table} WHERE {col} = %s").format(
-            table=sql.Identifier(table_name),
-            col=sql.Identifier(prod_col)
-        )
-        cur.execute(stmt, (product_id,))
-    finally:
-        cur.close()
-
-
-def remove_product_record(product_id: int):
-    product = fetch_product_by_id(product_id)
-    if not product:
-        return False, "Product not found.", None
-    conn = get_db_connection()
-    try:
-        columns = resolve_product_columns(conn)
-        delete_order_items_for_product(conn, product_id)
-        cur = conn.cursor()
-        cur.execute(f"DELETE FROM Products WHERE {columns['id']} = %s", (product_id,))
-        if cur.rowcount == 0:
-            conn.rollback()
-            return False, "Product not found.", None
-        conn.commit()
-        cur.close()
-    except Exception as exc:
-        conn.rollback()
-        app.logger.exception("Failed to delete product %s: %s", product_id, exc)
-        return False, "Unable to delete product.", None
-    finally:
-        conn.close()
-    public_id = product.get("image_public_id") or extract_public_id_from_url(product.get("image"))
-    delete_product_image(public_id)
-    return True, "Product deleted.", product
+app.config["ALLOWED_IMAGE_EXTENSIONS"] = ALLOWED_IMAGE_EXTENSIONS
+app.config["CLOUDINARY_FOLDER"] = CLOUDINARY_FOLDER
+app.config["CLOUDINARY_READY"] = _cloudinary_configured
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
+app.config["DATABASE_URL"] = DATABASE_URL
 
 
 def _env_flag(name: str, default: str = "false") -> bool:
@@ -363,14 +153,14 @@ def send_email(recipient: str, subject: str, body: str, purpose: str = "email") 
 
 def send_signup_email(recipient: str, first_name: str = "") -> bool:
     """Send a welcome email to the new user after signup."""
-    subject = os.getenv("SIGNUP_EMAIL_SUBJECT", "Welcome to CleanX!")
+    subject = os.getenv("SIGNUP_EMAIL_SUBJECT", "Welcome to TP Masuhla!")
     greeting_name = first_name or recipient.split("@")[0]
     default_body = (
         f"Hi {greeting_name},\n\n"
-        "Thanks for creating a CleanX account. You can now log in anytime to book "
+        "Thanks for creating a TP Masuhla account. You can now log in anytime to book "
         "and manage your cleaning services.\n\n"
         "If you did not create this account, please contact our support team immediately.\n\n"
-        "-- The CleanX Team"
+        "-- The TP Masuhla Team"
     )
     body = os.getenv("SIGNUP_EMAIL_BODY", default_body)
     return send_email(recipient, subject, body, purpose="signup email")
@@ -378,13 +168,13 @@ def send_signup_email(recipient: str, first_name: str = "") -> bool:
 
 def send_password_reset_email(recipient: str, reset_url: str) -> bool:
     """Send the password reset link to a user."""
-    subject = os.getenv("RESET_EMAIL_SUBJECT", "Reset your CleanX password")
+    subject = os.getenv("RESET_EMAIL_SUBJECT", "Reset your TP Masuhla password")
     default_body = (
         "Hi,\n\n"
-        "We received a request to reset your CleanX password. To choose a new password, "
+        "We received a request to reset your TP Masuhla password. To choose a new password, "
         f"please open the link below:\n{reset_url}\n\n"
         "This link will expire soon. If you did not request a reset, you can ignore this email.\n\n"
-        "-- The CleanX Team"
+        "-- The TP Masuhla Team"
     )
     body = os.getenv("RESET_EMAIL_BODY", default_body)
     return send_email(recipient, subject, body, purpose="password reset email")
@@ -401,7 +191,7 @@ def send_order_confirmation_email(
     """Send an order confirmation email summarizing purchased items."""
     if not recipient:
         return False
-    subject = os.getenv("ORDER_CONFIRMATION_SUBJECT", "Your CleanX order confirmation")
+    subject = os.getenv("ORDER_CONFIRMATION_SUBJECT", "Your TP Masuhla order confirmation")
     name = (first_name or "").strip() or recipient.split("@")[0]
     lines = [
         f"Hi {name},",
@@ -436,7 +226,7 @@ def send_order_confirmation_email(
             "",
             "You'll receive another update when your order ships.",
             "",
-            "-- The CleanX Team",
+            "-- The TP Masuhla Team",
         ]
     )
     body = "\n".join(lines)
@@ -479,13 +269,6 @@ def get_reset_token_ttl() -> int:
     except ValueError:
         return 3600
 
-def get_db_connection():
-    """Create a new PostgreSQL connection using DATABASE_URL."""
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL is not configured.")
-    return psycopg2.connect(DATABASE_URL)
-
-
 @app.context_processor
 def inject_nav_state():
     """Inject common navbar state across all templates without touching CSS.
@@ -518,37 +301,6 @@ def inject_nav_state():
             "user_email": None,
         }
 
-
-def table_columns(conn, table_name):
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = %s AND table_name = %s
-            """,
-            ("public", table_name.lower()),
-        )
-        rows = cur.fetchall()
-        return {str(r[0]).lower() for r in rows}
-    except Exception:
-        return set()
-
-
-# Utility to resolve an ID column for a table (prefers common names)
-def table_id_column(conn, table_name, candidates=("id", "order_id", "OrderID", "orderid")):
-    cols = {c.lower() for c in table_columns(conn, table_name)}
-    # Preferred exact matches
-    for cand in candidates:
-        if cand.lower() in cols:
-            return cand
-    # Fallback: any column ending with 'id'
-    for c in cols:
-        if c.endswith("id"):
-            return c
-    # Last resort: return 'id' and let caller handle errors
-    return "id"
 
 # --------------------------- Admin Helpers ---------------------------
 def get_admin_emails():
@@ -784,7 +536,7 @@ def forgot_password():
             reset_url = url_for("reset_password", token=token, _external=True)
             if not send_password_reset_email(email, reset_url):
                 app.logger.warning("Password reset email could not be sent to %s.", email)
-                if _should_expose_reset_link():
+                if should_expose_reset_link():
                     dev_link = reset_url
 
         success_msg = "If an account exists for that email, you'll receive a password reset link shortly."
@@ -1283,7 +1035,7 @@ def admin_delete_all_products():
 def delete_all_orders():
     conn = get_db_connection()
     try:
-        lookup, table_name = resolve_table_columns_generic(conn, ['OrderItems', 'order_items', 'orderitems'])
+        lookup, table_name = resolve_table_columns_generic(conn, ORDER_ITEM_TABLE_CANDIDATES)
         if lookup:
             cur = conn.cursor()
             cur.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(table_name)))
@@ -1343,7 +1095,7 @@ def delete_all_orders_for_ids(order_ids):
         return
     conn = get_db_connection()
     try:
-        lookup, table_name = resolve_table_columns_generic(conn, ['OrderItems', 'order_items', 'orderitems'])
+        lookup, table_name = resolve_table_columns_generic(conn, ORDER_ITEM_TABLE_CANDIDATES)
         if lookup:
             cur = conn.cursor()
             order_fk = None
@@ -2261,6 +2013,10 @@ def success():
 
     conn = get_db_connection()
     cursor = conn.cursor()
+    order_items_lookup, order_items_table = ensure_order_items_table(conn)
+    ensure_guest_table(conn)
+    ensure_orders_schema(conn)
+    ensure_orders_phone_column(conn)
 
     # Normalize items and backfill price/name from DB if needed
     norm_cart = []
@@ -2294,46 +2050,69 @@ def success():
     total_amount = sum(i["price"] * i["quantity"] for i in norm_cart)
 
     try:
-        new_order_id = None
-        # Ensure phone column exists alongside address
-        ensure_orders_phone_column(conn)
-        # Dynamically include guest name fields if columns exist
-        cols = table_columns(conn, 'Orders')
-        base_cols = ['user_email', 'address', 'total_amount', 'order_date']
-        insert_cols = ['user_email', 'address', 'total_amount']
-        insert_vals = [user_email, address, float(total_amount)]
-        # Consider common column names for guest names
-        fname_col = None
-        lname_col = None
-        for cand in ('first_name', 'customer_first_name', 'guest_first_name'):
-            if cand in cols:
-                fname_col = cand
-                break
-        for cand in ('last_name', 'customer_last_name', 'guest_last_name'):
-            if cand in cols:
-                lname_col = cand
-                break
-        if fname_col:
-            insert_cols.append(fname_col)
-            insert_vals.append(first_name)
-        if lname_col:
-            insert_cols.append(lname_col)
-            insert_vals.append(last_name)
+        orders_cols = {}
+        try:
+            orders_cols = {c.lower(): c for c in table_columns(conn, 'Orders')}
+        except Exception:
+            orders_cols = {}
 
-        # Optional phone column
-        phone_col = None
-        for cand in ('phone', 'contact_number', 'mobile'):
-            if cand in cols:
-                phone_col = cand
-                break
-        if phone_col:
-            insert_cols.append(phone_col)
-            insert_vals.append(phone)
+        def pick_order_col(*candidates):
+            for cand in candidates:
+                if not cand:
+                    continue
+                key = cand.lower()
+                if key in orders_cols:
+                    return orders_cols[key]
+            return None
+
+        def add_value(col_name, value, cols_list, vals_list):
+            if col_name:
+                cols_list.append(col_name)
+                vals_list.append(value)
+
+        insert_cols = []
+        insert_vals = []
+
+        user_id_value = fetch_user_id(conn, session.get("email"))
+        guest_email = guest.get("email") if guest else None
+        guest_id_value = None
+        if not user_id_value and guest_email:
+            guest_id_value = get_or_create_guest(conn, guest_email, first_name, last_name)
+
+        add_value(pick_order_col('user_email', 'email', 'customer_email', 'contact_email'), user_email, insert_cols, insert_vals)
+        add_value(pick_order_col('address', 'shipping_address', 'delivery_address'), address, insert_cols, insert_vals)
+        add_value(pick_order_col('total_amount', 'total', 'amount', 'grand_total'), float(total_amount), insert_cols, insert_vals)
+        add_value(pick_order_col('first_name', 'customer_first_name', 'guest_first_name'), first_name, insert_cols, insert_vals)
+        add_value(pick_order_col('last_name', 'customer_last_name', 'guest_last_name'), last_name, insert_cols, insert_vals)
+        add_value(pick_order_col('phone', 'contact_number', 'mobile'), phone, insert_cols, insert_vals)
+        user_id_col = pick_order_col('user_id', 'userid', 'customer_id')
+        guest_id_col = pick_order_col('guest_id', 'guestid')
+        payment_status_col = pick_order_col('payment_status', 'status')
+        viewed_col = pick_order_col('viewed', 'is_viewed', 'is_new')
+
+        if user_id_value is not None:
+            add_value(user_id_col, user_id_value, insert_cols, insert_vals)
+        elif guest_id_value is not None:
+            add_value(guest_id_col, guest_id_value, insert_cols, insert_vals)
+
+        if payment_status_col:
+            add_value(payment_status_col, "paid", insert_cols, insert_vals)
+        if viewed_col:
+            add_value(viewed_col, False, insert_cols, insert_vals)
+
+        if not insert_cols:
+            raise RuntimeError("Orders table is missing required columns for inserting data.")
 
         order_id_col = table_id_column(conn, 'Orders', ("id", "order_id", "OrderID", "orderid"))
-        col_list = ", ".join(insert_cols + ['order_date'])
-        placeholders = ", ".join(["%s"] * len(insert_cols)) + ", CURRENT_TIMESTAMP"
-        insert_sql = f"INSERT INTO Orders ({col_list}) VALUES ({placeholders}) RETURNING {order_id_col}"
+        order_date_col = pick_order_col('order_date', 'ordered_at', 'created_at', 'date')
+
+        column_list = list(insert_cols)
+        placeholder_list = ["%s"] * len(insert_cols)
+        if order_date_col:
+            column_list.append(order_date_col)
+            placeholder_list.append("CURRENT_TIMESTAMP")
+
+        insert_sql = f"INSERT INTO Orders ({', '.join(column_list)}) VALUES ({', '.join(placeholder_list)}) RETURNING {order_id_col}"
         cursor.execute(insert_sql, tuple(insert_vals))
         row = cursor.fetchone()
         if not row or row[0] is None:
@@ -2342,34 +2121,92 @@ def success():
 
         conn.commit()
 
-        for i in norm_cart:
+        order_items_lookup = order_items_lookup or {}
+        if not order_items_table or not order_items_lookup:
+            raise RuntimeError("Order items table is unavailable.")
+
+        def pick_item_col(*candidates):
+            for cand in candidates:
+                if not cand:
+                    continue
+                key = cand.lower()
+                if key in order_items_lookup:
+                    return order_items_lookup[key]
+            return None
+
+        item_order_col = pick_item_col('order_id', 'orderid')
+        item_product_col = pick_item_col('product_id', 'productid')
+        item_quantity_col = pick_item_col('quantity', 'qty', 'amount')
+        item_price_col = pick_item_col('price', 'unit_price', 'unitprice')
+        if not all([item_order_col, item_product_col, item_quantity_col, item_price_col]):
+            raise RuntimeError("Order items table is missing required columns.")
+
+        insert_item_sql = sql.SQL(
+            "INSERT INTO {table} ({order_col}, {product_col}, {qty_col}, {price_col}) VALUES (%s, %s, %s, %s)"
+        ).format(
+            table=sql.Identifier(order_items_table),
+            order_col=sql.Identifier(item_order_col),
+            product_col=sql.Identifier(item_product_col),
+            qty_col=sql.Identifier(item_quantity_col),
+            price_col=sql.Identifier(item_price_col),
+        )
+
+        aggregated_items = {}
+        for item in norm_cart:
+            pid = item.get("id")
+            try:
+                pid_key = int(pid)
+            except Exception:
+                continue
+            if pid_key is None:
+                continue
+            entry = aggregated_items.setdefault(pid_key, {"quantity": 0, "price": item["price"]})
+            entry["quantity"] += item.get("quantity", 0)
+            entry["price"] = item["price"]
+
+        for pid, details in aggregated_items.items():
+            if pid is None:
+                continue
+            qty_val = max(0, details.get("quantity", 0))
+            if qty_val <= 0:
+                continue
             cursor.execute(
-                "INSERT INTO OrderItems (order_id, product_id, quantity, price) VALUES (%s, %s, %s, %s)",
-                (new_order_id, i["id"], i["quantity"], i["price"])
+                insert_item_sql,
+                (
+                    new_order_id,
+                    pid,
+                    qty_val,
+                    float(details.get("price", 0.0)) if details.get("price") is not None else 0.0,
+                ),
             )
         conn.commit()
 
         # Decrement product quantities based on ordered amounts
+        qty_col = None
+        id_col = None
         try:
             pcols = {c.lower() for c in table_columns(conn, 'Products')}
             qty_col = next((c for c in ('quantity', 'qty', 'stock', 'in_stock') if c in pcols), None)
             if qty_col:
                 id_col = table_id_column(conn, 'Products', ("id", "product_id", "ProductID", "productid"))
-                for i in norm_cart:
-                    pid = i.get("id")
-                    try:
-                        qty_to_sub = int(i.get("quantity", 0))
-                    except Exception:
-                        qty_to_sub = 0
-                    if pid is None or qty_to_sub <= 0:
+        except Exception as e:
+            print("quantity decrement lookup error:", e)
+            qty_col = None
+            id_col = None
+
+        if qty_col and id_col:
+            try:
+                for pid, details in aggregated_items.items():
+                    qty_to_sub = max(0, details.get("quantity", 0))
+                    if qty_to_sub <= 0:
                         continue
                     cursor.execute(
                         f"UPDATE Products SET {qty_col} = CASE WHEN COALESCE({qty_col},0) - %s < 0 THEN 0 ELSE COALESCE({qty_col},0) - %s END WHERE {id_col} = %s",
-                        (qty_to_sub, qty_to_sub, pid)
+                        (qty_to_sub, qty_to_sub, pid),
                     )
                 conn.commit()
-        except Exception as e:
-            print("quantity decrement error:", e)
+            except Exception as e:
+                print("quantity decrement error:", e)
     except Exception as e:
         print("Database error:", e)
         flash("Error saving order details. Please contact support.")
@@ -2404,38 +2241,6 @@ def success():
 
 # --------------------------- Admin Views ---------------------------
 
-def _orders_viewed_column(conn):
-    cols = table_columns(conn, 'Orders')
-    # try common variants
-    for c in ("viewed", "is_viewed", "is_explored", "explored", "is_new"):
-        if c in cols:
-            return c
-    return None
-
-
-def ensure_orders_phone_column(conn):
-    """Ensure the Orders table has a phone column alongside address.
-
-    Adds a nullable NVARCHAR/VARCHAR column named 'phone' if missing.
-    Safe to call repeatedly; errors are swallowed.
-    """
-    try:
-        cols = table_columns(conn, 'Orders')
-        if 'phone' not in cols:
-            cur = conn.cursor()
-            try:
-                cur.execute("ALTER TABLE Orders ADD COLUMN IF NOT EXISTS phone VARCHAR(64)")
-                conn.commit()
-            except Exception:
-                pass
-            finally:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
@@ -2443,10 +2248,27 @@ def admin_dashboard():
     cur = conn.cursor()
 
     # Recent orders
-    viewed_col = _orders_viewed_column(conn)
+    viewed_col = orders_viewed_column(conn)
     id_col = table_id_column(conn, 'Orders', ("id", "order_id", "OrderID", "orderid"))
     orders_cols_raw = table_columns(conn, 'Orders')
     orders_cols = {c.lower(): c for c in orders_cols_raw}
+    order_items_lookup, order_items_table = resolve_table_columns_generic(conn, ORDER_ITEM_TABLE_CANDIDATES)
+
+    def pick_oi_col(*candidates):
+        if not order_items_lookup:
+            return None
+        for cand in candidates:
+            if not cand:
+                continue
+            key = cand.lower()
+            if key in order_items_lookup:
+                return order_items_lookup[key]
+        return None
+
+    oi_order_fk = pick_oi_col("order_id", "orderid")
+    oi_product_fk = pick_oi_col("product_id", "productid")
+    oi_qty_col = pick_oi_col("quantity", "qty", "amount")
+    oi_price_col = pick_oi_col("price", "unit_price", "unitprice")
 
     def find_column(primary_candidates=None, contains=None, exclude=None):
         """Return the actual column name from Orders matching the request."""
@@ -2581,9 +2403,31 @@ def admin_dashboard():
     items_per_order = {}
     order_items_summary = {}
     try:
-        cur.execute("SELECT order_id, SUM(quantity) as items FROM OrderItems GROUP BY order_id")
-        for (oid, items) in cur.fetchall():
-            items_per_order[int(oid)] = int(items)
+        if order_items_table and oi_order_fk:
+            if oi_qty_col:
+                aggregate_expr = sql.SQL("COALESCE(SUM({qty}), 0) AS items").format(qty=sql.Identifier(oi_qty_col))
+            else:
+                aggregate_expr = sql.SQL("COUNT(1) AS items")
+            items_query = sql.SQL(
+                "SELECT {order_col}, {agg} FROM {table} GROUP BY {order_col}"
+            ).format(
+                order_col=sql.Identifier(oi_order_fk),
+                agg=aggregate_expr,
+                table=sql.Identifier(order_items_table),
+            )
+            cur.execute(items_query)
+            for row in cur.fetchall():
+                if not row:
+                    continue
+                order_val, count_val = row[0], row[1] if len(row) > 1 else None
+                try:
+                    order_id = int(order_val)
+                except Exception:
+                    continue
+                try:
+                    items_per_order[order_id] = int(count_val if count_val is not None else 0)
+                except Exception:
+                    items_per_order[order_id] = 0
     except Exception:
         pass
 
@@ -2615,35 +2459,25 @@ def admin_dashboard():
 
     # Collect order item summaries
     try:
-        oi_cols = {c.lower(): c for c in table_columns(conn, 'OrderItems')}
-        order_fk = None
-        prod_fk = None
-        qty_col = None
-        if oi_cols:
-            for cand in ("order_id", "OrderID", "orderid"):
-                if cand.lower() in oi_cols:
-                    order_fk = oi_cols[cand.lower()]
-                    break
-            for cand in ("product_id", "ProductID", "productid"):
-                if cand.lower() in oi_cols:
-                    prod_fk = oi_cols[cand.lower()]
-                    break
-            for cand in ("quantity", "qty", "amount"):
-                if cand in oi_cols:
-                    qty_col = oi_cols[cand]
-                    break
-        if order_fk and prod_fk:
-            select_cols = [f"{order_fk} AS order_id", f"{prod_fk} AS product_id"]
-            if qty_col:
-                select_cols.append(qty_col)
-            cur.execute(f"SELECT {', '.join(select_cols)} FROM OrderItems")
+        if order_items_table and oi_order_fk and oi_product_fk:
+            select_identifiers = [
+                sql.Identifier(oi_order_fk),
+                sql.Identifier(oi_product_fk),
+            ]
+            if oi_qty_col:
+                select_identifiers.append(sql.Identifier(oi_qty_col))
+            items_query = sql.SQL("SELECT {fields} FROM {table}").format(
+                fields=sql.SQL(", ").join(select_identifiers),
+                table=sql.Identifier(order_items_table),
+            )
+            cur.execute(items_query)
             for row in cur.fetchall():
                 if not row:
                     continue
                 order_val = row[0]
                 prod_val = row[1] if len(row) > 1 else None
                 qty_val = 1
-                if qty_col and len(row) > 2 and row[2] is not None:
+                if oi_qty_col and len(row) > 2 and row[2] is not None:
                     try:
                         qty_val = int(row[2])
                     except Exception:
@@ -2676,31 +2510,53 @@ def admin_dashboard():
     product_stats = []
     try:
         prod_id_col = table_id_column(conn, 'Products', ("id", "product_id", "ProductID", "productid"))
-        prod_cols = {c.lower() for c in table_columns(conn, 'Products')}
-        if 'name' in prod_cols:
+        prod_cols = {c.lower(): c for c in table_columns(conn, 'Products')}
+        prod_name_col = None
+        for cand in ('name', 'product_name', 'title'):
+            if cand in prod_cols:
+                prod_name_col = prod_cols[cand]
+                break
+        if not prod_name_col:
+            prod_name_col = next((actual for key, actual in prod_cols.items() if 'name' in key), None)
+        if not prod_name_col:
             prod_name_col = 'name'
+
+        if order_items_table and oi_product_fk and oi_qty_col and oi_price_col:
+            stats_query = sql.SQL(
+                "SELECT p.{prod_id} AS id, p.{prod_name} AS name, "
+                "COALESCE(SUM(oi.{qty}), 0) AS qty, "
+                "COALESCE(SUM(oi.{qty} * oi.{price}), 0) AS revenue "
+                "FROM Products p "
+                "LEFT JOIN {oi_table} oi ON oi.{oi_prod} = p.{prod_id} "
+                "GROUP BY p.{prod_id}, p.{prod_name} "
+                "ORDER BY qty DESC"
+            ).format(
+                prod_id=sql.Identifier(prod_id_col),
+                prod_name=sql.Identifier(prod_name_col),
+                qty=sql.Identifier(oi_qty_col),
+                price=sql.Identifier(oi_price_col),
+                oi_table=sql.Identifier(order_items_table),
+                oi_prod=sql.Identifier(oi_product_fk),
+            )
+            cur.execute(stats_query)
         else:
-            # pick first column containing 'name'
-            prod_name_col = next((c for c in prod_cols if 'name' in c), None)
-            if not prod_name_col:
-                prod_name_col = 'name'  # fallback
-
-        oi_cols = {c.lower() for c in table_columns(conn, 'OrderItems')}
-        oi_prod_col = 'product_id' if 'product_id' in oi_cols else (next((c for c in oi_cols if 'product' in c and c.endswith('id')), 'product_id'))
-
-        sql = (
-            f"SELECT p.{prod_id_col} AS id, p.{prod_name_col} AS name, "
-            f"COALESCE(SUM(oi.quantity), 0) AS qty, COALESCE(SUM(oi.quantity * oi.price), 0) AS revenue "
-            f"FROM Products p LEFT JOIN OrderItems oi ON oi.{oi_prod_col} = p.{prod_id_col} "
-            f"GROUP BY p.{prod_id_col}, p.{prod_name_col} ORDER BY qty DESC"
-        )
-        cur.execute(sql)
+            stats_query = sql.SQL(
+                "SELECT {prod_id} AS id, {prod_name} AS name FROM Products"
+            ).format(
+                prod_id=sql.Identifier(prod_id_col),
+                prod_name=sql.Identifier(prod_name_col),
+            )
+            cur.execute(stats_query)
         for row in cur.fetchall():
+            pid = row[0] if row else None
+            name = row[1] if len(row) > 1 else None
+            qty_val = row[2] if len(row) > 2 else 0
+            rev_val = row[3] if len(row) > 3 else 0.0
             product_stats.append({
-                "id": int(row[0]) if row[0] is not None else 0,
-                "name": row[1],
-                "qty": int(row[2]) if row[2] is not None else 0,
-                "revenue": float(row[3]) if row[3] is not None else 0.0,
+                "id": int(pid) if pid is not None else 0,
+                "name": name,
+                "qty": int(qty_val) if qty_val is not None else 0,
+                "revenue": float(rev_val) if rev_val is not None else 0.0,
             })
     except Exception as e:
         print("product stats error:", e)
@@ -2877,7 +2733,7 @@ def admin_mark_viewed():
         oid = order_id
 
     conn = get_db_connection()
-    col = _orders_viewed_column(conn)
+    col = orders_viewed_column(conn)
     id_col = table_id_column(conn, 'Orders', ("id", "order_id", "OrderID", "orderid"))
     if col:
         cur = conn.cursor()
@@ -2892,10 +2748,14 @@ def admin_mark_viewed():
     else:
         # Session-based mark if no column
         seen = set(session.get("admin_seen_orders", []))
-        seen.add(int(oid))
+        try:
+            seen.add(int(oid))
+        except Exception:
+            seen.add(oid)
         session["admin_seen_orders"] = list(seen)
         conn.close()
 
+    record_completed_order(oid)
     return jsonify({"ok": True, "order_id": oid})
 
 
@@ -2951,70 +2811,99 @@ def admin_order_details(oid: int):
             pass
 
         # Optionally attach item count
+        oi_lookup, oi_table = resolve_table_columns_generic(conn, ORDER_ITEM_TABLE_CANDIDATES)
+
+        def pick_oi_column(*candidates):
+            if not oi_lookup:
+                return None
+            for cand in candidates:
+                if not cand:
+                    continue
+                key = cand.lower()
+                if key in oi_lookup:
+                    return oi_lookup[key]
+            return None
+
         try:
-            oi_id_col = table_id_column(conn, 'OrderItems', ("order_id", "OrderID", "orderid"))
-            cur.execute(f"SELECT COUNT(1), COALESCE(SUM(quantity),0) FROM OrderItems WHERE {oi_id_col} = %s", (oid,))
-            r = cur.fetchone()
-            if r:
-                data["lines"] = int(r[0])
-                try:
-                    data["items"] = int(r[1])
-                except Exception:
-                    data["items"] = None
+            if oi_table:
+                order_fk = pick_oi_column("order_id", "orderid")
+                qty_col = pick_oi_column("quantity", "qty", "amount")
+                if order_fk:
+                    agg_expr = sql.SQL("COALESCE(SUM({qty}), 0)").format(qty=sql.Identifier(qty_col)) if qty_col else sql.SQL("COUNT(1)")
+                    count_query = sql.SQL(
+                        "SELECT COUNT(1), {agg} FROM {table} WHERE {order_col} = %s"
+                    ).format(
+                        agg=agg_expr,
+                        table=sql.Identifier(oi_table),
+                        order_col=sql.Identifier(order_fk),
+                    )
+                    tmp_cur = conn.cursor()
+                    tmp_cur.execute(count_query, (oid,))
+                    r = tmp_cur.fetchone()
+                    tmp_cur.close()
+                    if r:
+                        data["lines"] = int(r[0]) if r[0] is not None else 0
+                        try:
+                            data["items"] = int(r[1]) if len(r) > 1 and r[1] is not None else data["lines"]
+                        except Exception:
+                            data["items"] = data.get("lines")
         except Exception:
             pass
-        finally:
-            try:
-                cur.close()
-            except Exception:
-                pass
 
         # Fetch ordered items (name, qty, price, image if available)
         items = []
         try:
-            oi_cols = {c.lower() for c in table_columns(conn, 'OrderItems')}
-            if oi_cols:
-                oi_order_fk = None
-                for cand in ("order_id", "OrderID", "orderid"):
-                    if cand.lower() in oi_cols:
-                        oi_order_fk = cand
-                        break
-                oi_product_fk = None
-                for cand in ("product_id", "ProductID", "productid"):
-                    if cand.lower() in oi_cols:
-                        oi_product_fk = cand
-                        break
-                qty_col = "quantity" if "quantity" in oi_cols else ("qty" if "qty" in oi_cols else None)
-                price_col = "price" if "price" in oi_cols else ("unit_price" if "unit_price" in oi_cols else None)
+            if oi_lookup and oi_table:
+                oi_order_fk = pick_oi_column("order_id", "orderid")
+                oi_product_fk = pick_oi_column("product_id", "productid")
+                qty_col = pick_oi_column("quantity", "qty", "amount")
+                price_col = pick_oi_column("price", "unit_price", "unitprice")
 
                 if oi_order_fk and oi_product_fk:
-                    cur = conn.cursor()
-                    select_bits = [oi_product_fk]
-                    if qty_col: select_bits.append(qty_col)
-                    if price_col: select_bits.append(price_col)
-                    cur.execute(f"SELECT {', '.join(select_bits)} FROM OrderItems WHERE {oi_order_fk} = %s", (oid,))
-                    raw_items = cur.fetchall() or []
-                    cur.close()
+                    select_cols = [oi_product_fk]
+                    if qty_col:
+                        select_cols.append(qty_col)
+                    if price_col:
+                        select_cols.append(price_col)
 
-                    # Build items basic list
+                    query = sql.SQL(
+                        "SELECT {fields} FROM {table} WHERE {order_col} = %s"
+                    ).format(
+                        fields=sql.SQL(", ").join(sql.Identifier(c) for c in select_cols),
+                        table=sql.Identifier(oi_table),
+                        order_col=sql.Identifier(oi_order_fk),
+                    )
+                    tmp_cur = conn.cursor()
+                    tmp_cur.execute(query, (oid,))
+                    raw_items = tmp_cur.fetchall() or []
+                    tmp_cur.close()
+
                     for r in raw_items:
                         idx = 0
-                        pid = r[idx]; idx += 1
-                        qty = int(r[idx]) if qty_col and len(r) > (idx-0) else None; idx = idx + (1 if qty_col else 0)
-                        up = None
+                        pid = r[idx]
+                        idx += 1
+                        qty_val = None
+                        if qty_col:
+                            try:
+                                qty_val = int(r[idx]) if r[idx] is not None else None
+                            except Exception:
+                                qty_val = None
+                            idx += 1
+                        price_val = None
                         if price_col:
                             try:
-                                up = float(r[idx])
+                                price_val = float(r[idx]) if r[idx] is not None else None
                             except Exception:
-                                up = None
+                                price_val = None
+                            idx += 1
                         item = {
                             "product_id": int(pid) if isinstance(pid, (int,)) else pid,
-                            "quantity": qty if qty is not None else 1,
-                            "unit_price": up,
+                            "quantity": qty_val if qty_val is not None else 1,
+                            "unit_price": price_val,
                         }
                         if item["unit_price"] is not None:
                             try:
-                                item["line_total"] = float(item["unit_price"]) * float(item["quantity"]) 
+                                item["line_total"] = float(item["unit_price"]) * float(item["quantity"])
                             except Exception:
                                 pass
                         items.append(item)
@@ -3023,40 +2912,49 @@ def admin_order_details(oid: int):
                     prod_cols = {c.lower() for c in table_columns(conn, 'Products')}
                     if prod_cols:
                         prod_id_col = table_id_column(conn, 'Products', ("id", "product_id", "ProductID", "productid"))
-                        name_col = "name" if "name" in prod_cols else ("product_name" if "product_name" in prod_cols else None)
+                        name_col = next((c for c in ("name", "product_name") if c in prod_cols), None)
                         image_col = "image" if "image" in prod_cols else None
                         price_col_p = "price" if "price" in prod_cols else None
                         if name_col or image_col or price_col_p:
-                            # Map by id
                             by_id = {}
                             for it in items:
                                 by_id.setdefault(it["product_id"], it)
-                            cur = conn.cursor()
-                            for pid in list(by_id.keys()):
+                            tmp_cur = conn.cursor()
+                            prod_select_cols = [prod_id_col]
+                            index_map = []
+                            if name_col:
+                                index_map.append(("name", len(prod_select_cols)))
+                                prod_select_cols.append(name_col)
+                            if image_col:
+                                index_map.append(("image", len(prod_select_cols)))
+                                prod_select_cols.append(image_col)
+                            if price_col_p:
+                                index_map.append(("price", len(prod_select_cols)))
+                                prod_select_cols.append(price_col_p)
+                            prod_query = sql.SQL("SELECT {fields} FROM Products WHERE {id_col} = %s").format(
+                                fields=sql.SQL(", ").join(sql.Identifier(c) for c in prod_select_cols),
+                                id_col=sql.Identifier(prod_id_col),
+                            )
+                            for pid_val, target in by_id.items():
                                 try:
-                                    cols_select = [prod_id_col]
-                                    if name_col: cols_select.append(name_col)
-                                    if image_col: cols_select.append(image_col)
-                                    if price_col_p: cols_select.append(price_col_p)
-                                    cur.execute(f"SELECT {', '.join(cols_select)} FROM Products WHERE {prod_id_col} = %s", (pid,))
-                                    pr = cur.fetchone()
-                                    if not pr: 
+                                    tmp_cur.execute(prod_query, (pid_val,))
+                                    pr = tmp_cur.fetchone()
+                                    if not pr:
                                         continue
-                                    idx = 0
-                                    _pid = pr[idx]; idx += 1
-                                    it = by_id.get(pid)
-                                    if name_col and len(pr) >= idx+0:
-                                        it["name"] = pr[idx]; idx += 1
-                                    if image_col and len(pr) >= idx+0:
-                                        it["image"] = pr[idx]; idx += 1
-                                    if price_col_p and len(pr) >= idx+0 and it.get("unit_price") is None:
-                                        try:
-                                            it["unit_price"] = float(pr[idx])
-                                        except Exception:
-                                            pass
+                                    for label, idx_pos in index_map:
+                                        if idx_pos < len(pr):
+                                            if label == "name":
+                                                target["name"] = pr[idx_pos]
+                                            elif label == "image":
+                                                target["image"] = pr[idx_pos]
+                                            elif label == "price" and target.get("unit_price") is None:
+                                                try:
+                                                    target["unit_price"] = float(pr[idx_pos]) if pr[idx_pos] is not None else None
+                                                except Exception:
+                                                    pass
                                 except Exception:
                                     continue
-                            cur.close()
+                            tmp_cur.close()
         except Exception:
             pass
 
@@ -3209,8 +3107,5 @@ if app is not None:
             return jsonify(ok=False, error='invalid'), 400
         if order_id <= 0:
             return jsonify(ok=False, error='missing'), 400
-        completed = set(session.get('admin_completed_orders', []))
-        completed.add(order_id)
-        session['admin_completed_orders'] = list(completed)
-        session.modified = True
+        record_completed_order(order_id)
         return jsonify(ok=True)
