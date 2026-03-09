@@ -482,9 +482,15 @@
               'Content-Type': 'application/json',
               'Accept': 'application/json'
             },
+            credentials: 'same-origin',
             body: JSON.stringify({ email })
           });
-          const data = await res.json();
+          let data = null;
+          try{
+            data = await res.json();
+          }catch(parseErr){
+            console.error('promote parse failed', parseErr);
+          }
           if(data && data.ok){
             if(window.showToast){
               window.showToast(data.message || `${email} promoted.`, 'success');
@@ -524,7 +530,8 @@
       toggleLoader(btn, true);
       fetch(url, {
         method: 'POST',
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        credentials: 'same-origin'
       }).then(res => res.json()).then(data => {
         if(data && data.ok){
           if(window.showToast){
