@@ -176,6 +176,7 @@ def resolve_product_columns(conn):
         "price": pick(("price", "amount", "cost")),
         "image": pick(("image", "image_url", "photo", "picture", "imagepath")),
         "image_public_id": pick(("image_public_id", "cloudinary_id", "public_id", "imagepublicid")),
+        "quantity": pick(("quantity", "qty", "stock", "in_stock")),
     }
 
 
@@ -190,6 +191,7 @@ def fetch_product_by_id(product_id: int):
             ("price", columns["price"]),
             ("image", columns["image"]),
             ("image_public_id", columns["image_public_id"]),
+            ("quantity", columns["quantity"]),
         ):
             if column:
                 select_parts.append(f"{column} AS {alias}")
@@ -211,6 +213,11 @@ def fetch_product_by_id(product_id: int):
         if data.get("price") is not None:
             try:
                 data["price"] = float(data["price"])
+            except Exception:
+                pass
+        if data.get("quantity") is not None:
+            try:
+                data["quantity"] = int(data["quantity"])
             except Exception:
                 pass
         return data
@@ -1039,6 +1046,22 @@ def admin_add_product():
     name = (request.form.get("name") or "").strip()
     price_raw = (request.form.get("price") or "").strip()
     file = request.files.get("image")
+    quantity_raw = request.form.get("quantity")
+    quantity_value = None
+    quantity_field_present = quantity_raw is not None
+    if quantity_field_present:
+        quantity_raw = quantity_raw.strip()
+        if quantity_raw:
+            try:
+                quantity_value = int(quantity_raw)
+            except Exception:
+                flash("Please provide a valid stock level.", "error")
+                return redirect(url_for("admin_edit_product", product_id=product_id))
+            if quantity_value < 0:
+                flash("Stock level cannot be negative.", "error")
+                return redirect(url_for("admin_edit_product", product_id=product_id))
+        else:
+            quantity_value = None
 
     if not name:
         flash("Product name is required.", "error")
@@ -1115,6 +1138,22 @@ def admin_edit_product(product_id):
     name = (request.form.get("name") or "").strip()
     price_raw = (request.form.get("price") or "").strip()
     file = request.files.get("image")
+    quantity_raw = request.form.get("quantity")
+    quantity_value = None
+    quantity_field_present = quantity_raw is not None
+    if quantity_field_present:
+        quantity_raw = quantity_raw.strip()
+        if quantity_raw:
+            try:
+                quantity_value = int(quantity_raw)
+            except Exception:
+                flash("Please provide a valid stock level.", "error")
+                return redirect(url_for("admin_edit_product", product_id=product_id))
+            if quantity_value < 0:
+                flash("Stock level cannot be negative.", "error")
+                return redirect(url_for("admin_edit_product", product_id=product_id))
+        else:
+            quantity_value = None
 
     if not name:
         flash("Product name is required.", "error")
@@ -1158,6 +1197,9 @@ def admin_edit_product(product_id):
             if columns["image_public_id"] and new_public_id:
                 updates.append(f"{columns['image_public_id']} = %s")
                 params.append(new_public_id)
+        if columns["quantity"] and quantity_field_present:
+            updates.append(f"{columns['quantity']} = %s")
+            params.append(quantity_value)
         if not updates:
             flash("Nothing to update.", "info")
             return redirect(url_for("admin_edit_product", product_id=product_id))
